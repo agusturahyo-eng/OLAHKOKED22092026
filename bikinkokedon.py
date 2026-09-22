@@ -66,131 +66,73 @@ def fix_masked_info(df_baru, df_master, df_sup_pb):
     df_baru.loc[is_masked_alamat, 'ALAMAT'] = df_baru.loc[is_masked_alamat, 'IDPEL'].map(alamat_map).fillna(df_baru.loc[is_masked_alamat, 'ALAMAT'])
     return df_baru
 
-# --- LOGIKA EKSTRAKSI TABEL PDF ---
+# --- LOGIKA EKSTRAKSI TABEL PDF (MENGGUNAKAN SCRIPT USER) ---
 def get_pdf_tables(page):
-    tables = page.extract_tables()
-    if tables and len(tables) > 0 and any(len(t) > 1 for t in tables if t):
-        return tables
+    # Menggunakan setting dari script "import pdf_2.py" yang berhasil
+    table_settings = {
+        "vertical_strategy": "lines",
+        "horizontal_strategy": "text",
+    }
     
-    try:
-        tables = page.extract_tables({
-            "vertical_strategy": "text",
-            "horizontal_strategy": "text",
-            "intersection_y_tolerance": 10,
-            "intersection_x_tolerance": 10,
-        })
-        if tables and len(tables) > 0 and any(len(t) > 1 for t in tables if t):
-            return tables
-    except Exception:
-        pass
-    return []
-
-def is_new_record(row):
-    """Mengecek apakah baris merupakan AWAL RECORD PELANGGAN BARU."""
-    if not row:
-        return False
-        
-    row_str = " ".join([str(c) for c in row if c])
+    tables = page.extract_tables(table_settings)
     
-    # 1. Mengandung No. Agenda 16-18 digit angka (Misal: 524050512605223125)
-    if re.search(r'\b\d{16,18}\b', row_str):
-        return True
+    # Fallback ke default jika tidak mendeteksi garis (untuk PDF jenis lain)
+    if not tables or len(tables) == 0 or all(len(t) < 2 for t in tables):
+        tables = page.extract_tables()
         
-    # 2. Cell pertama adalah No Urut angka murni (1 - 9999)
-    first_cell = str(row[0]).strip()
-    if first_cell.isdigit() and 1 <= int(first_cell) <= 9999:
-        return True
-
-    # 3. Mengandung IDPEL 11-12 digit di cell utama jika agenda tidak terdeteksi
-    if len(row) > 3:
-        for cell in [row[0], row[1], row[3]]:
-            c_str = str(cell).strip()
-            if re.search(r'^\d{11,12}$', c_str):
-                return True
-
-    return False
+    return tables
 
 def process_hybrid_table(table):
-    if not table or len(table) < 1:
+    """
+    Logika langsung dari import pdf_2.py untuk mengatasi teks terpotong ke bawah.
+    """
+    if not table or len(table) < 2:
         return None
 
-    # Bersihkan sel: gabungkan teks multiline (\n) menjadi 1 baris teks utuh per sel
-    cleaned_table = []
+    merged_rows = []
+    # Loop untuk seluruh baris yang berhasil dideteksi
     for row in table:
-        cleaned_row = [" ".join(str(cell).split()) if cell and str(cell) != 'None' else "" for cell in row]
-        if any(cleaned_row):
-            cleaned_table.append(cleaned_row)
+        # Bersihkan enter/newline menjadi spasi
+        cleaned_row = [str(cell).replace('\n', ' ').strip() if cell and str(cell) != 'None' else "" for cell in row]
+        
+        if not any(cleaned_row):
+            continue
+        
+        # Jika ini baris pertama, ATAU kolom pertama ada isinya
+        # Maka jadikan ini sebagai baris baru
+        if not merged_rows or cleaned_row[0] != "":
+            merged_rows.append(cleaned_row)
+        else:
+            # Jika kolom pertama kosong, berarti ini teks yang terpotong ke bawah
+            # Sambungkan teks ini ke baris data di atasnya
+            for i in range(len(cleaned_row)):
+                if cleaned_row[i] != "":
+                    if i < len(merged_rows[-1]):
+                        merged_rows[-1][i] = (merged_rows[-1][i] + " " + cleaned_row[i]).strip()
+                    else:
+                        merged_rows[-1].append(cleaned_row[i])
 
-    if not cleaned_table:
+    if not merged_rows:
         return None
 
-    header_keywords = ['ID PEL', 'IDPEL', 'NOPEL', 'NAMA', 'ALAMAT', 'TARIF', 'DAYA', 'AGENDA', 'REGISTER', 'NO URUT']
-    header_index = -1
-
-    for idx, row in enumerate(cleaned_table[:10]):
-        row_str = " ".join([re.sub(r'[^A-Z]', '', c.upper()) for c in row])
-        matches = sum(1 for kw in header_keywords if re.sub(r'[^A-Z]', '', kw) in row_str)
-        if matches >= 2 or ('ID' in row_str and 'NAMA' in row_str) or ('NOPEL' in row_str and 'NAMA' in row_str) or ('AGENDA' in row_str and 'NAMA' in row_str):
+    # Cari baris yang menjadi header (untuk melewati judul buku agenda dll)
+    header_index = 0
+    header_keywords = ['ID PEL', 'IDPEL', 'NOPEL', 'NAMA', 'ALAMAT', 'AGENDA', 'REGISTER', 'URUT']
+    for idx, row in enumerate(merged_rows[:10]):
+        row_str = " ".join([str(c).upper() for c in row])
+        if any(kw in row_str for kw in header_keywords):
             header_index = idx
             break
 
-    if header_index == -1:
-        header_index = 0
-
-    header_row_1 = cleaned_table[header_index]
-    data_start_index = header_index + 1
-
-    # Cek header 2 baris (misal: Tarif/Daya -> Lama | Baru)
-    if header_index + 1 < len(cleaned_table):
-        next_row = cleaned_table[header_index + 1]
-        if not is_new_record(next_row) and any(k in " ".join([c.upper() for c in next_row]) for k in ['LAMA', 'BARU', 'VA', 'TELP']):
-            combined_headers = []
-            for h1, h2 in zip(header_row_1, next_row):
-                combined_headers.append(f"{h1} {h2}".strip())
-            header_row_1 = combined_headers
-            data_start_index = header_index + 2
-
-    headers = [h.upper() if h != "" else f"KOLOM_{i+1}" for i, h in enumerate(header_row_1)]
-
-    data_rows = cleaned_table[data_start_index:]
-    valid_rows = []
-
-    for row in data_rows:
-        row_str = " ".join([c.upper() for c in row if c])
+    # Gunakan baris header
+    headers = []
+    for i, h in enumerate(merged_rows[header_index]):
+        val = str(h).strip() if str(h).strip() != "" else f"KOLOM_{i+1}"
+        headers.append(val)
         
-        # Abaikan baris header berulang, watermark, dan footer
-        if ('ID PEL' in row_str or 'IDPEL' in row_str or 'NOPEL' in row_str or 'NO AGENDA' in row_str) and ('NAMA' in row_str or 'ALAMAT' in row_str):
-            continue
-        if 'TOTAL' in row_str or 'HALAMAN' in row_str or 'BUKU AGENDA' in row_str:
-            continue
-
-        if is_new_record(row):
-            valid_rows.append(list(row))
-        else:
-            # Jika lanjutan baris (sub-line) dari pelanggan yang sama
-            if valid_rows:
-                for i in range(min(len(row), len(valid_rows[-1]))):
-                    val = str(row[i]).strip()
-                    if val and val.upper() not in ['LAMA', 'BARU', '0', 'NONE']:
-                        if valid_rows[-1][i]:
-                            if not valid_rows[-1][i].endswith(val):
-                                valid_rows[-1][i] = (valid_rows[-1][i] + " " + val).strip()
-                        else:
-                            valid_rows[-1][i] = val
-
-    if not valid_rows:
-        return pd.DataFrame(columns=headers)
-
-    num_cols = len(headers)
-    padded_rows = []
-    for r in valid_rows:
-        if len(r) < num_cols:
-            r = r + [""] * (num_cols - len(r))
-        elif len(r) > num_cols:
-            r = r[:num_cols]
-        padded_rows.append(r)
-
-    return pd.DataFrame(padded_rows, columns=headers)
+    # Masukkan sisa baris (data asli) ke DataFrame
+    df = pd.DataFrame(merged_rows[header_index+1:], columns=headers)
+    return df
 
 def find_target_column(col_name):
     """Pencocokan nama kolom otomatis presisi."""
