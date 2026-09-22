@@ -148,7 +148,7 @@ def to_excel_bytes(df):
 # ==========================================
 # ANTARMUKA STREAMLIT
 # ==========================================
-st.title("⚡ Aplikasi Pembanding & Distribusi Multi-File")
+st.title("⚡ Aplikasi Olah Koked")
 
 # BIKIN DUA TAB
 tab1, tab2 = st.tabs(["1️⃣ Tahap 1: Persiapan Data Petugas", "2️⃣ Tahap 2: Rekap Pekerjaan & Mutasi KOKED"])
@@ -220,7 +220,7 @@ with tab1:
                         add_to_zip(df_tetap, "")
 
                     st.success("✅ File untuk petugas berhasil dibuat!")
-                    st.download_button("📥 Download Distribusi Petugas (.zip)", data=zip_buffer.getvalue(), file_name="Distribusi_Petugas.zip", mime="application/zip")
+                    st.download_button("📥 Download Distribusi Petugas (.zip)", data=zip_buffer.getvalue(), file_name="Hasil_PerPetugas.zip", mime="application/zip")
                 except Exception as e:
                     st.error(f"❌ Error: {str(e)}")
 
@@ -274,7 +274,7 @@ with tab2:
                     st.download_button(
                         label="📥 Download Hasil Akhir (.zip)", 
                         data=zip_buffer2.getvalue(), 
-                        file_name="Hasil_Akhir_Mutasi.zip", 
+                        file_name="Hasil_Koked.zip", 
                         mime="application/zip",
                         type="primary"
                     )
