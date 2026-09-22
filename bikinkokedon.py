@@ -86,15 +86,35 @@ def get_pdf_tables(page):
     return []
 
 def is_new_record(row):
-    """Mengecek apakah baris memiliki persis 11-12 digit IDPEL."""
+    """Mengecek apakah baris merupakan AWAL RECORD PELANGGAN BARU."""
+    if not row:
+        return False
+        
     row_str = " ".join([str(c) for c in row if c])
-    return bool(re.search(r'(?<!\d)\d{11,12}(?!\d)', row_str))
+    
+    # 1. Mengandung No. Agenda 16-18 digit angka (Misal: 524050512605223125)
+    if re.search(r'\b\d{16,18}\b', row_str):
+        return True
+        
+    # 2. Cell pertama adalah No Urut angka murni (1 - 9999)
+    first_cell = str(row[0]).strip()
+    if first_cell.isdigit() and 1 <= int(first_cell) <= 9999:
+        return True
+
+    # 3. Mengandung IDPEL 11-12 digit di cell utama jika agenda tidak terdeteksi
+    if len(row) > 3:
+        for cell in [row[0], row[1], row[3]]:
+            c_str = str(cell).strip()
+            if re.search(r'^\d{11,12}$', c_str):
+                return True
+
+    return False
 
 def process_hybrid_table(table):
     if not table or len(table) < 1:
         return None
 
-    # Bersihkan sel: gabungkan teks multiline (\n) menjadi 1 baris teks yang rapi
+    # Bersihkan sel: gabungkan teks multiline (\n) menjadi 1 baris teks utuh per sel
     cleaned_table = []
     for row in table:
         cleaned_row = [" ".join(str(cell).split()) if cell and str(cell) != 'None' else "" for cell in row]
@@ -104,13 +124,13 @@ def process_hybrid_table(table):
     if not cleaned_table:
         return None
 
-    header_keywords = ['ID PEL', 'IDPEL', 'NOPEL', 'NAMA', 'ALAMAT', 'TARIF', 'DAYA', 'AGENDA', 'REGISTER']
+    header_keywords = ['ID PEL', 'IDPEL', 'NOPEL', 'NAMA', 'ALAMAT', 'TARIF', 'DAYA', 'AGENDA', 'REGISTER', 'NO URUT']
     header_index = -1
 
     for idx, row in enumerate(cleaned_table[:10]):
         row_str = " ".join([re.sub(r'[^A-Z]', '', c.upper()) for c in row])
         matches = sum(1 for kw in header_keywords if re.sub(r'[^A-Z]', '', kw) in row_str)
-        if matches >= 2 or ('ID' in row_str and 'NAMA' in row_str) or ('NOPEL' in row_str and 'NAMA' in row_str):
+        if matches >= 2 or ('ID' in row_str and 'NAMA' in row_str) or ('NOPEL' in row_str and 'NAMA' in row_str) or ('AGENDA' in row_str and 'NAMA' in row_str):
             header_index = idx
             break
 
@@ -120,9 +140,10 @@ def process_hybrid_table(table):
     header_row_1 = cleaned_table[header_index]
     data_start_index = header_index + 1
 
+    # Cek header 2 baris (misal: Tarif/Daya -> Lama | Baru)
     if header_index + 1 < len(cleaned_table):
         next_row = cleaned_table[header_index + 1]
-        if not is_new_record(next_row) and any(k in " ".join([c.upper() for c in next_row]) for k in ['LAMA', 'BARU', 'VA']):
+        if not is_new_record(next_row) and any(k in " ".join([c.upper() for c in next_row]) for k in ['LAMA', 'BARU', 'VA', 'TELP']):
             combined_headers = []
             for h1, h2 in zip(header_row_1, next_row):
                 combined_headers.append(f"{h1} {h2}".strip())
@@ -137,14 +158,16 @@ def process_hybrid_table(table):
     for row in data_rows:
         row_str = " ".join([c.upper() for c in row if c])
         
-        if ('ID PEL' in row_str or 'IDPEL' in row_str or 'NOPEL' in row_str) and ('NAMA' in row_str or 'ALAMAT' in row_str):
+        # Abaikan baris header berulang, watermark, dan footer
+        if ('ID PEL' in row_str or 'IDPEL' in row_str or 'NOPEL' in row_str or 'NO AGENDA' in row_str) and ('NAMA' in row_str or 'ALAMAT' in row_str):
             continue
-        if 'TOTAL' in row_str or 'HALAMAN' in row_str:
+        if 'TOTAL' in row_str or 'HALAMAN' in row_str or 'BUKU AGENDA' in row_str:
             continue
 
         if is_new_record(row):
             valid_rows.append(list(row))
         else:
+            # Jika lanjutan baris (sub-line) dari pelanggan yang sama
             if valid_rows:
                 for i in range(min(len(row), len(valid_rows[-1]))):
                     val = str(row[i]).strip()
@@ -179,6 +202,13 @@ def find_target_column(col_name):
         return 'NAMA'
     if 'ALAMATPEMOHON' in col_clean or 'ALAMAT' in col_clean or 'LOKASI' in col_clean:
         return 'ALAMAT'
+        
+    # Penanganan khusus Tarif / Daya Lama vs Baru
+    if 'LAMA' in col_clean and ('TARIF' in col_clean or 'DAYA' in col_clean or 'TARIP' in col_clean):
+        return 'TARIF_LAMA'
+    if 'BARU' in col_clean and ('TARIF' in col_clean or 'DAYA' in col_clean or 'TARIP' in col_clean):
+        return 'TARIF'
+
     if 'TARIF' in col_clean or 'TARIP' in col_clean or 'GOL' in col_clean:
         return 'TARIF'
     if 'DAYA' in col_clean or 'VA' in col_clean or 'KAPAS' in col_clean:
@@ -222,7 +252,7 @@ def normalize_pdf_dataframe(df):
                 if len(parts) > 1 and (not 'DAYA' in df.columns or str(df.at[idx, 'DAYA']).strip() in ['', '0', '0.0']):
                     df.at[idx, 'DAYA'] = parts[1].strip()
 
-    # 3. Logika Fallback Posisi Kolom
+    # 3. Logika Fallback Posisi Kolom jika nama kolom tidak bernama baku
     if 'IDPEL' in df.columns:
         id_idx = df.columns.get_loc('IDPEL')
         
