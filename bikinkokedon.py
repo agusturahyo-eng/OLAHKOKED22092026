@@ -85,15 +85,42 @@ def get_pdf_tables(page):
         pass
     return []
 
+def unpack_multiline_table(table):
+    """Membongkar sel tabel yang berisi newline (\\n) menjadi baris data terpisah."""
+    if not table:
+        return table
+    unpacked = []
+    for row in table:
+        if not row:
+            continue
+        has_newline = any('\n' in str(cell) for cell in row if cell)
+        if not has_newline:
+            unpacked.append(row)
+            continue
+        
+        split_cells = [str(cell).split('\n') if cell and str(cell) != 'None' else [''] for cell in row]
+        max_lines = max(len(sc) for sc in split_cells)
+        
+        for line_idx in range(max_lines):
+            sub_row = []
+            for sc in split_cells:
+                val = sc[line_idx].strip() if line_idx < len(sc) else ""
+                sub_row.append(val)
+            if any(sub_row):
+                unpacked.append(sub_row)
+    return unpacked
+
 def is_new_record(row):
-    """Mengecek apakah baris memiliki persis 11-12 digit angka berturut-turut (IDPEL)."""
+    """Mengecek apakah baris memiliki persis 11-12 digit IDPEL."""
     row_str = " ".join([str(c) for c in row if c])
-    # Regex: Mencari angka 11 atau 12 digit, tidak didahului/diikuti angka lain
     return bool(re.search(r'(?<!\d)\d{11,12}(?!\d)', row_str))
 
 def process_hybrid_table(table):
     if not table or len(table) < 1:
         return None
+
+    # Membongkar sel bertumpuk sebelum pembersihan spasi
+    table = unpack_multiline_table(table)
 
     cleaned_table = []
     for row in table:
@@ -150,7 +177,6 @@ def process_hybrid_table(table):
                     val = str(row[i]).strip()
                     if val and val.upper() not in ['LAMA', 'BARU', '0', 'NONE']:
                         if valid_rows[-1][i]:
-                            # Mencegah penumpukan teks yang persis sama
                             if not valid_rows[-1][i].endswith(val):
                                 valid_rows[-1][i] = (valid_rows[-1][i] + " " + val).strip()
                         else:
@@ -213,17 +239,15 @@ def normalize_pdf_dataframe(df):
     df.columns = new_cols
     df = df.loc[:, ~df.columns.duplicated(keep='first')]
 
-    # 2. Logika Fallback Posisi Kolom (Mencegah kolom NAMA terbuang)
+    # 2. Logika Fallback Posisi Kolom
     if 'IDPEL' in df.columns:
         id_idx = df.columns.get_loc('IDPEL')
         
-        # Jika kolom NAMA belum terdeteksi, ambil kolom tepat di kanan IDPEL
         if 'NAMA' not in df.columns and id_idx + 1 < len(df.columns):
             col_name = df.columns[id_idx + 1]
             if col_name not in ['ALAMAT', 'TARIF', 'DAYA', 'GARDU', 'TIANG', 'KOKED']:
                 df = df.rename(columns={col_name: 'NAMA'})
         
-        # Jika kolom ALAMAT belum terdeteksi, ambil kolom tepat di kanan NAMA
         if 'NAMA' in df.columns and 'ALAMAT' not in df.columns:
             nama_idx = df.columns.get_loc('NAMA')
             if nama_idx + 1 < len(df.columns):
