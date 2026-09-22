@@ -8,12 +8,23 @@ from dbfread import DBF
 
 st.set_page_config(page_title="Aplikasi Pengolahan Data PB", layout="wide")
 
-# --- FUNGSI PENGOLAHAN STRING ---
+# --- FUNGSI PENGOLAHAN STRING & ANGKA ---
 def clean_idpel(x):
     if pd.isna(x): return ""
-    # Hapus .0 di akhir jika terbaca sebagai float, lalu hapus karakter non-digit
     s = str(x).split('.')[0]
     return re.sub(r'\D', '', s)
+
+def clean_daya(val):
+    if pd.isna(val): return 0.0
+    s = str(val).strip()
+    try:
+        num = float(s)
+        if 0 < num < 300: return num * 1000.0
+        return num
+    except:
+        s_clean = s.replace('.', '').replace(',', '')
+        try: return float(s_clean)
+        except: return 0.0
 
 # --- FUNGSI MEMBACA FILE ---
 def read_file(file_obj, filename):
@@ -24,7 +35,6 @@ def read_file(file_obj, filename):
         elif ext in ['xls', 'xlsx']:
             df = pd.read_excel(file_obj, dtype=str)
         elif ext == 'dbf':
-            # Menggunakan dbfread sebagai pengganti simpledbf
             with tempfile.NamedTemporaryFile(delete=False, suffix='.dbf') as tmp:
                 tmp.write(file_obj.getvalue())
                 tmp_path = tmp.name
@@ -37,7 +47,26 @@ def read_file(file_obj, filename):
             return pd.DataFrame()
             
         if not df.empty:
-            df.columns = df.columns.str.strip().str.upper()
+            df.columns = df.columns.astype(str).str.replace('\n', ' ').str.strip().str.upper()
+            
+            # Standardisasi nama kolom secara otomatis agar seragam
+            rename_dict = {}
+            for col in df.columns:
+                col_clean = col.upper().strip()
+                if any(kw in col_clean for kw in ['ID PEL', 'IDPEL', 'NOPEL', 'NO PEL']) and 'TETANGGA' not in col_clean:
+                    rename_dict[col] = 'IDPEL'
+                elif any(kw in col_clean for kw in ['NAMA PEMOHON', 'NAMA PELANGGAN']) or col_clean == 'NAMA':
+                    rename_dict[col] = 'NAMA'
+                elif any(kw in col_clean for kw in ['ALAMAT PEMOHON', 'ALAMAT PELANGGAN', 'NAMAPNJ']) or col_clean == 'ALAMAT':
+                    rename_dict[col] = 'ALAMAT'
+                elif col_clean in ['TARIF', 'TARIP', 'TARIF BARU']:
+                    rename_dict[col] = 'TARIP'
+                elif col_clean in ['DAYA', 'DAYA BARU']:
+                    rename_dict[col] = 'DAYA'
+                elif col_clean in ['KDDK', 'KOKED']:
+                    rename_dict[col] = 'KOKED'
+                    
+            df = df.rename(columns=rename_dict)
             # Mencegah error "The truth value of a Series is ambiguous" akibat duplikat kolom
             df = df.loc[:, ~df.columns.duplicated(keep='first')]
             
@@ -56,11 +85,11 @@ def proses_list_file(file_list, tipe_data='master'):
         fname = file.name
 
         if tipe_data == 'baru' or tipe_data == 'petugas':
-            # Opsional di Data Baru & Petugas
             if 'KOKED' not in df.columns: df['KOKED'] = ''
             if 'ALAMAT' not in df.columns: df['ALAMAT'] = ''
             if 'TARIP' not in df.columns: df['TARIP'] = ''
-            if 'DAYA' not in df.columns: df['DAYA'] = 0
+            if 'DAYA' not in df.columns: df['DAYA'] = 0.0
+            else: df['DAYA'] = df['DAYA'].apply(clean_daya)
             
             for col in ['IDPEL', 'NAMA']:
                 if col not in df.columns:
@@ -68,45 +97,46 @@ def proses_list_file(file_list, tipe_data='master'):
             
             df['IDPEL'] = df['IDPEL'].apply(clean_idpel)
             df['KOKED'] = df['KOKED'].astype(str).str.strip()
-            list_df.append(df)
+            list_df.append(df[['IDPEL', 'KOKED', 'TARIP', 'DAYA', 'NAMA', 'ALAMAT']])
             
         elif tipe_data == 'master':
             if 'IDPEL' not in df.columns: raise ValueError(f"Kolom 'IDPEL' hilang di file Master: {fname}")
             if 'NAMA' not in df.columns: df['NAMA'] = ''
             if 'ALAMAT' not in df.columns: df['ALAMAT'] = ''
             if 'KOKED' not in df.columns: df['KOKED'] = ''
+            if 'TARIP' not in df.columns: df['TARIP'] = ''
+            if 'DAYA' not in df.columns: df['DAYA'] = 0.0
+            else: df['DAYA'] = df['DAYA'].apply(clean_daya)
             
             df['IDPEL'] = df['IDPEL'].apply(clean_idpel)
             df['KOKED'] = df['KOKED'].astype(str).str.strip()
-            list_df.append(df[['IDPEL', 'NAMA', 'ALAMAT', 'KOKED']])
+            # Diperbaiki agar TARIP dan DAYA dari Master ikut terbawa dan tersimpan
+            list_df.append(df[['IDPEL', 'NAMA', 'ALAMAT', 'KOKED', 'TARIP', 'DAYA']])
             
         elif tipe_data == 'sup_pb':
             if 'IDPEL' not in df.columns: raise ValueError(f"Kolom 'IDPEL' hilang di file PB Baru: {fname}")
             if 'NAMA' not in df.columns: df['NAMA'] = ''
             if 'ALAMAT' not in df.columns: df['ALAMAT'] = ''
-            
-            # KOKED di PB Baru kalau ada dimasukkan, kalau tidak ada tidak error
             if 'KOKED' not in df.columns: df['KOKED'] = ''
+            if 'TARIP' not in df.columns: df['TARIP'] = ''
+            if 'DAYA' not in df.columns: df['DAYA'] = 0.0
+            else: df['DAYA'] = df['DAYA'].apply(clean_daya)
             
             df['IDPEL'] = df['IDPEL'].apply(clean_idpel)
             df['KOKED'] = df['KOKED'].astype(str).str.strip()
-            # Hanya ambil IDPEL, NAMA, ALAMAT, dan KOKED (jika kebetulan ada)
-            list_df.append(df[['IDPEL', 'NAMA', 'ALAMAT', 'KOKED']])
+            list_df.append(df[['IDPEL', 'NAMA', 'ALAMAT', 'KOKED', 'TARIP', 'DAYA']])
 
     if not list_df: return pd.DataFrame()
-    return pd.concat(list_df, ignore_index=True)
+    return pd.concat(list_df, ignore_index=True).drop_duplicates(subset=['IDPEL'], keep='first')
 
-# --- FUNGSI UN-MASKING (NAMA/ALAMAT BINTANG & KOKED KOSONG) ---
+# --- FUNGSI UN-MASKING (NAMA/ALAMAT BINTANG & KOKED/TARIF/DAYA KOSONG) ---
 def fix_masked_info(df_baru, df_master, df_sup_pb):
-    """
-    Menambal nama/alamat yang mengandung '*' di df_baru dengan data asli dari df_sup_pb atau df_master.
-    KOKED utamanya dari Data Baru, tapi jika di Data Baru kosong, kita ambilkan dari PB Baru/Master jika ada.
-    """
     if df_baru.empty: return df_baru
     df_baru = df_baru.reset_index(drop=True)
-    nama_map, alamat_map, koked_map = {}, {}, {}
+    
+    nama_map, alamat_map, koked_map, tarip_map, daya_map = {}, {}, {}, {}, {}
 
-    # 1. Dari Data PB Baru (Fokus ambil Nama & Alamat. Koked kalau ada)
+    # 1. Kumpulkan dari Data PB Baru
     if not df_sup_pb.empty:
         sup_clean = df_sup_pb.drop_duplicates(subset=['IDPEL'], keep='first')
         
@@ -119,8 +149,16 @@ def fix_masked_info(df_baru, df_master, df_sup_pb):
         if 'KOKED' in sup_clean.columns:
             valid_koked = sup_clean[sup_clean['KOKED'].astype(str).str.strip().ne('')]
             koked_map.update(valid_koked.set_index('IDPEL')['KOKED'].to_dict())
+            
+        if 'TARIP' in sup_clean.columns:
+            valid_tarip = sup_clean[sup_clean['TARIP'].astype(str).str.strip().ne('')]
+            tarip_map.update(valid_tarip.set_index('IDPEL')['TARIP'].to_dict())
+            
+        if 'DAYA' in sup_clean.columns:
+            valid_daya = sup_clean[sup_clean['DAYA'] > 0]
+            daya_map.update(valid_daya.set_index('IDPEL')['DAYA'].to_dict())
 
-    # 2. Dari Data Master
+    # 2. Kumpulkan dari Data Master (Kini lengkap dengan Tarip & Daya)
     if not df_master.empty:
         master_clean = df_master.drop_duplicates(subset=['IDPEL'], keep='first')
         
@@ -133,30 +171,42 @@ def fix_masked_info(df_baru, df_master, df_sup_pb):
         if 'KOKED' in master_clean.columns:
             valid_koked = master_clean[master_clean['KOKED'].astype(str).str.strip().ne('')]
             koked_map.update(valid_koked.set_index('IDPEL')['KOKED'].to_dict())
+            
+        if 'TARIP' in master_clean.columns:
+            valid_tarip = master_clean[master_clean['TARIP'].astype(str).str.strip().ne('')]
+            tarip_map.update(valid_tarip.set_index('IDPEL')['TARIP'].to_dict())
+            
+        if 'DAYA' in master_clean.columns:
+            valid_daya = master_clean[master_clean['DAYA'] > 0]
+            daya_map.update(valid_daya.set_index('IDPEL')['DAYA'].to_dict())
 
-    # Cek yang perlu ditambal di Data Baru
+    # Kondisi data kosong / bintang di df_baru
     is_masked_nama = df_baru['NAMA'].astype(str).str.contains(r'\*', na=False) | df_baru['NAMA'].isna() | (df_baru['NAMA'].astype(str).str.strip() == '')
     is_masked_alamat = df_baru['ALAMAT'].astype(str).str.contains(r'\*', na=False) | df_baru['ALAMAT'].isna() | (df_baru['ALAMAT'].astype(str).str.strip() == '')
     is_empty_koked = df_baru['KOKED'].isna() | (df_baru['KOKED'].astype(str).str.strip() == '')
+    is_empty_tarip = df_baru['TARIP'].isna() | (df_baru['TARIP'].astype(str).str.strip() == '')
+    is_zero_daya = df_baru['DAYA'].isna() | (df_baru['DAYA'] == 0)
 
-    # Apply mapping
+    # Lakukan mapping penggantian
     if nama_map:
         df_baru.loc[is_masked_nama, 'NAMA'] = df_baru.loc[is_masked_nama, 'IDPEL'].map(nama_map).fillna(df_baru.loc[is_masked_nama, 'NAMA'])
     if alamat_map:
         df_baru.loc[is_masked_alamat, 'ALAMAT'] = df_baru.loc[is_masked_alamat, 'IDPEL'].map(alamat_map).fillna(df_baru.loc[is_masked_alamat, 'ALAMAT'])
     if koked_map:
         df_baru.loc[is_empty_koked, 'KOKED'] = df_baru.loc[is_empty_koked, 'IDPEL'].map(koked_map).fillna(df_baru.loc[is_empty_koked, 'KOKED'])
+    if tarip_map:
+        df_baru.loc[is_empty_tarip, 'TARIP'] = df_baru.loc[is_empty_tarip, 'IDPEL'].map(tarip_map).fillna(df_baru.loc[is_empty_tarip, 'TARIP'])
+    if daya_map:
+        df_baru.loc[is_zero_daya, 'DAYA'] = df_baru.loc[is_zero_daya, 'IDPEL'].map(daya_map).fillna(df_baru.loc[is_zero_daya, 'DAYA'])
 
     return df_baru
 
-# --- FUNGSI MENGAMBIL KODE PETUGAS DARI KOKED ---
 def get_petugas_code(koked):
     k = str(koked).strip().upper()
     if len(k) >= 5 and k[:3] == '524':
         return k[3:5]
     return "SEMUA_PETUGAS"
 
-# --- MAPPING NAMA PETUGAS UNTUK TAB 2 (Data Petugas) ---
 def map_nama_petugas(df_main, df_petugas):
     if 'KODE' not in df_petugas.columns or 'NAMA_PETUGAS' not in df_petugas.columns:
         df_main['NAMA_PETUGAS'] = 'TIDAK DIKETAHUI'
@@ -165,7 +215,6 @@ def map_nama_petugas(df_main, df_petugas):
     df_petugas['KODE'] = df_petugas['KODE'].astype(str).str.strip().str.upper()
     petugas_dict = df_petugas.drop_duplicates(subset=['KODE']).set_index('KODE')['NAMA_PETUGAS'].to_dict()
     
-    # Ambil 2 digit petugas dari KOKED
     df_main['KODE_PETUGAS'] = df_main['KOKED'].astype(str).apply(lambda x: x[3:5] if (len(x) >= 5 and x[:3] == '524') else "")
     df_main['NAMA_PETUGAS'] = df_main['KODE_PETUGAS'].map(petugas_dict).fillna('TIDAK DIKETAHUI')
     return df_main
@@ -173,7 +222,6 @@ def map_nama_petugas(df_main, df_petugas):
 # --- UI STREAMLIT ---
 st.title("Aplikasi Pengolahan Data PB (KOKED dari Data Baru)")
 
-# TAB NAVIGASI
 tab1, tab2 = st.tabs(["1. Pisah Data PB per Petugas", "2. Filter Data Petugas (Status PB)"])
 
 # ==========================================
@@ -181,7 +229,7 @@ tab1, tab2 = st.tabs(["1. Pisah Data PB per Petugas", "2. Filter Data Petugas (S
 # ==========================================
 with tab1:
     st.header("1. Pisah Data PB (Bulan INI) per Petugas")
-    st.info("KOKED dan target Data PB diambil dari 'Data Server Bulan INI'. File Master dan Data PB Baru hanya digunakan untuk membuka NAMA dan ALAMAT yang di-bintang (*).")
+    st.info("KOKED dan target Data PB diambil dari 'Data Server Bulan INI'. File Master dan Data PB Baru digunakan untuk un-masking NAMA, ALAMAT, TARIF, dan DAYA yang kosong atau berbintang (*).")
     
     col1, col2, col3 = st.columns(3)
     with col1:
@@ -201,22 +249,20 @@ with tab1:
                     df_master = proses_list_file(file_master, tipe_data='master') if file_master else pd.DataFrame()
                     df_sup_pb = proses_list_file(file_sup_pb, tipe_data='sup_pb') if file_sup_pb else pd.DataFrame()
 
-                    # Un-masking Nama, Alamat, (dan Koked jika di Data Baru kosong)
+                    # Un-masking Nama, Alamat, Koked, Tarip, dan Daya
                     df_baru = fix_masked_info(df_baru, df_master, df_sup_pb)
 
-                    # Buat kolom PETUGAS_MAP dari KOKED Data Baru
                     df_baru['PETUGAS_MAP'] = df_baru['KOKED'].apply(get_petugas_code)
-                    
-                    # Pisahkan DataFrame berdasarkan kode petugas
                     grouped = df_baru.groupby('PETUGAS_MAP')
                     
                     st.success("Berhasil diproses! Silakan download hasilnya di bawah:")
                     
-                    # Tampilkan tombol download
                     cols = st.columns(4)
                     idx = 0
+                    kolom_export = ['IDPEL', 'KOKED', 'NAMA', 'ALAMAT', 'TARIP', 'DAYA']
+                    
                     for kode, group_df in grouped:
-                        group_df_clean = group_df.drop(columns=['PETUGAS_MAP'])
+                        group_df_clean = group_df[kolom_export].copy()
                         
                         output = io.BytesIO()
                         with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
@@ -266,10 +312,8 @@ with tab2:
                     
                     master_idpel = set(df_master_2['IDPEL'].unique())
                     
-                    # Status PB Baru / Lama
                     df_petugas['STATUS_PB'] = df_petugas['IDPEL'].apply(lambda x: 'PB LAMA' if x in master_idpel else 'PB BARU')
                     
-                    # Mapping Nama Petugas jika ada
                     if file_mapping is not None:
                         df_map = read_file(file_mapping, file_mapping.name)
                         df_map.columns = df_map.columns.str.strip().str.upper()
@@ -277,23 +321,20 @@ with tab2:
                     
                     st.success("Data berhasil diproses!")
                     
-                    # Preview Data
                     st.subheader("Preview Data Hasil Filter:")
                     st.dataframe(df_petugas.head(20))
                     
-                    # Hitung Rekap
                     total_pb = len(df_petugas)
                     pb_lama = len(df_petugas[df_petugas['STATUS_PB'] == 'PB LAMA'])
                     pb_baru = len(df_petugas[df_petugas['STATUS_PB'] == 'PB BARU'])
                     
                     st.write(f"**Total Data:** {total_pb} | **PB Lama:** {pb_lama} | **PB Baru:** {pb_baru}")
                     
-                    # Buat file Excel dengan 3 Sheet
                     output2 = io.BytesIO()
                     with pd.ExcelWriter(output2, engine='xlsxwriter') as writer:
                         df_petugas.to_excel(writer, index=False, sheet_name='Semua Data')
                         df_petugas[df_petugas['STATUS_PB'] == 'PB BARU'].to_excel(writer, index=False, sheet_name='Hanya PB Baru')
-                        df_petugas[df_petugas['STATUS_PB'] == 'PB LAMA'].to_excel(writer, index=False, sheet_name='Hanya PB Lama')
+                        df_petugas[df_petugas['STATUS_PB'] == 'PB LAMA'].to_excel(writer, index=False, sheet_name='Hanya PB LAMA')
                     
                     excel_data2 = output2.getvalue()
                     
