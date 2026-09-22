@@ -78,14 +78,12 @@ def get_pdf_tables_tipe1(page):
     return tables
 
 def process_hybrid_table(table):
-    if not table or len(table) < 2:
-        return None
+    if not table or len(table) < 2: return None
 
     merged_rows = []
     for row in table:
         cleaned_row = [str(cell).replace('\n', ' ').strip() if cell and str(cell) != 'None' else "" for cell in row]
-        if not any(cleaned_row):
-            continue
+        if not any(cleaned_row): continue
         
         if not merged_rows or cleaned_row[0] != "":
             merged_rows.append(cleaned_row)
@@ -115,21 +113,20 @@ def process_hybrid_table(table):
     df = pd.DataFrame(merged_rows[header_index+1:], columns=headers)
     return df
 
-# --- LOGIKA EKSTRAKSI TABEL PDF TIPE 2 (DEFAULT) ---
+# --- LOGIKA EKSTRAKSI TABEL PDF TIPE 2 (DEFAULT & ALL COLUMNS) ---
 def process_standard_table(table):
-    if not table or len(table) < 2:
-        return None
+    if not table or len(table) < 2: return None
     
     cleaned_table = []
     for row in table:
         cleaned_row = [str(cell).replace('\n', ' ').strip() if cell and str(cell) != 'None' else "" for cell in row]
-        if any(cleaned_row):
-            cleaned_table.append(cleaned_row)
+        if any(cleaned_row): cleaned_table.append(cleaned_row)
 
     if len(cleaned_table) < 2: return None
 
+    # Cari header dinamis dari PDF
     header_index = 0
-    header_keywords = ['ID PEL', 'IDPEL', 'NOPEL', 'NAMA', 'ALAMAT']
+    header_keywords = ['ID PEL', 'IDPEL', 'NOPEL', 'NAMA', 'ALAMAT', 'NO', 'URUT', 'TANGGAL']
     for idx, row in enumerate(cleaned_table[:5]):
         row_str = " ".join([str(c).upper() for c in row])
         if any(kw in row_str for kw in header_keywords):
@@ -144,6 +141,7 @@ def process_standard_table(table):
     df = pd.DataFrame(cleaned_table[header_index+1:], columns=headers)
     return df
 
+# --- FUNGSI NORMALISASI (HANYA DIGUNAKAN DI TAB 3) ---
 def find_target_column(col_name):
     col_clean = re.sub(r'[^A-Z0-9]', '', str(col_name).upper())
     
@@ -213,9 +211,74 @@ def normalize_pdf_dataframe(df):
 
     return df[target_cols].reset_index(drop=True)
 
+# --- FUNGSI PEMBACA FILE UMUM TAHAP 1 & 2 ---
+def baca_ekstrak_tabel(uploaded_file):
+    ext = os.path.splitext(uploaded_file.name)[1].lower()
+    fname = uploaded_file.name
+    
+    if ext == '.xlsx':
+        df = pd.read_excel(uploaded_file)
+    else:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
+            tmp.write(uploaded_file.getvalue())
+            tmp_path = tmp.name
+
+        try:
+            if ext == '.dbf':
+                df = pd.DataFrame(iter(DBF(tmp_path, char_decode_errors='ignore')))
+            else:
+                st.error(f"Format tidak didukung di Tahap 1/2: {ext}")
+                return pd.DataFrame(), fname
+        finally:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+
+    df.columns = df.columns.astype(str).str.strip().str.upper()
+    df = df.rename(columns={'KDDK': 'KOKED', 'TARIF': 'TARIP', 'GOL TARIF': 'TARIP', 'NAMAPNJ': 'ALAMAT', 'ID PEL': 'IDPEL', 'ID_PELANGGAN': 'IDPEL', 'NOPEL': 'IDPEL'})
+    return df, fname
+
 def proses_list_file(files, tipe_data):
-    # Logika proses_list_file dipertahankan persis sama seperti sebelumnya
-    pass # (Fungsi ini sengaja di-skip di preview agar ringkas, aslinya sama persis)
+    list_df = []
+    for f in files:
+        df, fname = baca_ekstrak_tabel(f)
+        if df.empty: continue
+        
+        if tipe_data in ['baru', 'petugas']:
+            for col in ['ALAMAT', 'NAMA', 'TARIP', 'KOKED']:
+                if col not in df.columns: df[col] = ''
+            if 'DAYA' not in df.columns: df['DAYA'] = 0
+            if 'IDPEL' not in df.columns: raise ValueError(f"Kolom 'IDPEL' hilang di file {fname}")
+                
+            df['IDPEL'] = df['IDPEL'].apply(clean_idpel)
+            df['DAYA'] = df['DAYA'].apply(clean_daya)
+            df['KOKED'] = df['KOKED'].astype(str).str.strip()
+            list_df.append(df[['IDPEL', 'KOKED', 'TARIP', 'DAYA', 'NAMA', 'ALAMAT']])
+            
+        elif tipe_data == 'lama':
+            if 'IDPEL' not in df.columns: raise ValueError(f"Kolom 'IDPEL' hilang di file: {fname}")
+            if 'KOKED' not in df.columns: df['KOKED'] = ''
+            df['IDPEL'] = df['IDPEL'].apply(clean_idpel)
+            df['KOKED'] = df['KOKED'].astype(str).str.strip()
+            list_df.append(df[['IDPEL', 'KOKED']])
+            
+        elif tipe_data == 'master':
+            if 'IDPEL' not in df.columns: raise ValueError(f"Kolom 'IDPEL' hilang di file: {fname}")
+            for col in ['NAMA', 'ALAMAT', 'KOKED', 'TARIP']:
+                if col not in df.columns: df[col] = ''
+            if 'DAYA' not in df.columns: df['DAYA'] = 0
+            df['IDPEL'] = df['IDPEL'].apply(clean_idpel)
+            df['DAYA'] = df['DAYA'].apply(clean_daya)
+            list_df.append(df[['IDPEL', 'NAMA', 'ALAMAT', 'KOKED', 'TARIP', 'DAYA']])
+            
+        elif tipe_data == 'sup_pb':
+            if 'IDPEL' not in df.columns: raise ValueError(f"Kolom 'IDPEL' hilang di file: {fname}")
+            if 'NAMA' not in df.columns: df['NAMA'] = ''
+            if 'ALAMAT' not in df.columns: df['ALAMAT'] = ''
+            df['IDPEL'] = df['IDPEL'].apply(clean_idpel)
+            list_df.append(df[['IDPEL', 'NAMA', 'ALAMAT']])
+
+    if not list_df: return pd.DataFrame()
+    return pd.concat(list_df, ignore_index=True).drop_duplicates(subset=['IDPEL'], keep='first').reset_index(drop=True)
 
 def to_excel_bytes(df):
     output = io.BytesIO()
@@ -229,27 +292,107 @@ def to_excel_bytes(df):
 st.title("⚡ Aplikasi Olah Koked & Ekstrak PDF")
 
 tab1, tab2, tab3, tab4 = st.tabs([
-    "1️⃣ Tahap 1: Persiapan Data Petugas", 
-    "2️⃣ Tahap 2: Rekap Pekerjaan & Mutasi KOKED",
-    "3️⃣ Tahap 3: PDF Ekstrak (Tipe 1)",
-    "4️⃣ Tahap 4: PDF Ekstrak (Tipe 2)"
+    "1️⃣ Tahap 1: Persiapan Data", 
+    "2️⃣ Tahap 2: Mutasi KOKED",
+    "3️⃣ Tahap 3: PDF (Tipe 1 - Filter Kolom)",
+    "4️⃣ Tahap 4: PDF (Tipe 2 - Semua Kolom)"
 ])
 
 # ==========================================
-# TAB 1 & 2 DIBIARKAN SAMA (Disembunyikan di snippet ini agar ringkas)
+# TAB 1: PERSIAPAN DATA
 # ==========================================
 with tab1:
-    st.info("Fitur Tahap 1 tetap berjalan normal seperti versi sebelumnya.")
+    st.header("Tahap 1: Memecah Data Untuk Petugas Lapangan")
+    col1, col2 = st.columns(2)
+    with col1:
+        files_baru = st.file_uploader("[Tahap 1] Data Server Bulan INI", accept_multiple_files=True, key="t1_baru")
+        files_lama = st.file_uploader("[Tahap 1] Data Bulan LALU", accept_multiple_files=True, key="t1_lama")
+    with col2:
+        files_master = st.file_uploader("[Tahap 1] Data Master (Ganti ***)", accept_multiple_files=True, key="t1_master")
+        files_suppb = st.file_uploader("[Tahap 1] Data PB Baru", accept_multiple_files=True, key="t1_suppb")
 
-with tab2:
-    st.info("Fitur Tahap 2 tetap berjalan normal seperti versi sebelumnya.")
+    if st.button("Proses Tahap 1", type="primary"):
+        if not files_baru or not files_lama: st.error("Silakan unggah Data Bulan Ini dan Data Bulan Lalu.")
+        else:
+            with st.spinner("Menyiapkan data untuk petugas..."):
+                try:
+                    df_baru = proses_list_file(files_baru, 'baru')
+                    df_lama = proses_list_file(files_lama, 'lama')
+                    df_master = proses_list_file(files_master, 'master') if files_master else pd.DataFrame()
+                    df_sup_pb = proses_list_file(files_suppb, 'sup_pb') if files_suppb else pd.DataFrame()
+
+                    df_baru = fix_masked_info(df_baru, df_master, df_sup_pb)
+                    df_baru = df_baru[(df_baru['DAYA'] <= 33000) & (df_baru['IDPEL'] != '524050450911')].copy()
+                    
+                    list_idpel_lama = set(df_lama['IDPEL'].tolist())
+                    df_pb = df_baru[~df_baru['IDPEL'].isin(list_idpel_lama)].copy()
+                    df_tetap = df_baru[df_baru['IDPEL'].isin(list_idpel_lama)].copy()
+
+                    zip_buffer = io.BytesIO()
+                    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+                        if not df_pb.empty: zip_file.writestr("PB_SEMUA_PETUGAS.xlsx", to_excel_bytes(df_pb[['IDPEL', 'KOKED', 'NAMA', 'ALAMAT', 'TARIP', 'DAYA']]))
+                        mapping = {
+                            'C01': 'JCA', 'C02': 'TAA', 'C03': 'JCB', 'C04': 'JCC', 'C05': 'NCD',
+                            'C06': 'KBA', 'C07': 'TAB', 'C08': 'JCE', 'C09': 'TAC', 'C10': 'MBB',
+                            'C11': 'KAD', 'C12': 'TAE', 'C13': 'KCF', 'C14': 'JCG', 'C15': 'TAF',
+                            'C16': 'KAG', 'C17': 'BBC', 'C18': 'TAH', 'C19': 'BCK', 'C20': 'NCH',
+                            'C21': 'JBE', 'C22': 'MBF', 'C23': 'MBG', 'C24': 'KBH', 'C25': 'KBI',
+                            'C26': ['KAI', 'TAI'], 'C27': 'MCI', 'C28': ['KBJ', 'NBJ'], 
+                            'C29': ['JCJ', 'KCJ'], 'C30': 'TAJ', 'C31': 'MBK', 'C32': 'KBL',
+                            'C33': 'TAK', 'C34': 'KAL', 'C35': 'JCL', 'C36': 'MBD'
+                        }
+                        def add_to_zip(df_source, prefix=""):
+                            if df_source.empty: return
+                            for nama_file, kriteria in mapping.items():
+                                temp_df = df_source[df_source['KOKED'].str[3:6].isin(kriteria)] if isinstance(kriteria, list) else df_source[df_source['KOKED'].str[3:6] == kriteria]
+                                if not temp_df.empty: zip_file.writestr(f"{prefix}{nama_file}.xlsx", to_excel_bytes(temp_df.drop_duplicates(subset=['IDPEL'])[['IDPEL', 'KOKED', 'NAMA', 'ALAMAT', 'TARIP', 'DAYA']]))
+                        add_to_zip(df_pb, "PB_")
+                        add_to_zip(df_tetap, "")
+                    st.success("✅ File untuk petugas berhasil dibuat!")
+                    st.download_button("📥 Download Distribusi (.zip)", data=zip_buffer.getvalue(), file_name="Hasil_PerPetugas.zip", mime="application/zip")
+                except Exception as e:
+                    st.error(f"❌ Error Tahap 1: {str(e)}")
 
 # ==========================================
-# TAB 3: IMPORT & EKSTRAK PDF KE EXCEL (TIPE 1)
+# TAB 2: REKAP & PERUBAHAN KOKED
+# ==========================================
+with tab2:
+    st.header("Tahap 2: Gabung File Petugas & Mutasi KOKED")
+    col3, col4 = st.columns(2)
+    with col3: files_petugas = st.file_uploader("[Tahap 2] Data Hasil Kerja Petugas", accept_multiple_files=True, key="t2_petugas")
+    with col4: files_lama_pembanding = st.file_uploader("[Tahap 2] Data Bulan Lalu", accept_multiple_files=True, key="t2_lama")
+
+    if st.button("Proses Tahap 2", type="primary"):
+        if not files_petugas or not files_lama_pembanding: st.error("Silakan unggah Data Hasil Kerja Petugas dan Data Bulan Lalu.")
+        else:
+            with st.spinner("Membandingkan KOKED..."):
+                try:
+                    df_petugas = proses_list_file(files_petugas, 'petugas')
+                    df_lama_pem = proses_list_file(files_lama_pembanding, 'lama')
+
+                    df_compare = df_petugas[['IDPEL', 'KOKED']].merge(df_lama_pem[['IDPEL', 'KOKED']], on='IDPEL', suffixes=('_BARU', '_LAMA'))
+                    df_changed = df_compare[(df_compare['KOKED_BARU'] != df_compare['KOKED_LAMA']) & (df_compare['KOKED_LAMA'] != '')]
+                    
+                    df_petugas['NO_URUT'] = pd.to_numeric(df_petugas['KOKED'].str[7:10], errors='coerce').fillna(0).astype(int)
+                    df_petugas.sort_values(by=['KOKED', 'NO_URUT'], inplace=True)
+
+                    zip_buffer2 = io.BytesIO()
+                    with zipfile.ZipFile(zip_buffer2, "w", zipfile.ZIP_DEFLATED) as zip_file2:
+                        if not df_changed.empty:
+                            zip_file2.writestr("PERUBAHAN_KOKED.txt", "\n".join((df_changed['IDPEL'].astype(str) + "|" + df_changed['KOKED_BARU'].astype(str)).tolist()))
+                        zip_file2.writestr("DATA_GABUNGAN_FINAL.xlsx", to_excel_bytes(df_petugas[['IDPEL', 'KOKED', 'NAMA', 'ALAMAT', 'TARIP', 'DAYA']]))
+
+                    st.success(f"✅ Selesai! {len(df_changed)} data mutasi KOKED.")
+                    st.download_button("📥 Download Hasil Akhir (.zip)", data=zip_buffer2.getvalue(), file_name="Hasil_Koked.zip", mime="application/zip", type="primary")
+                except Exception as e:
+                    st.error(f"❌ Error Tahap 2: {str(e)}")
+
+# ==========================================
+# TAB 3: IMPORT & EKSTRAK PDF (TIPE 1)
 # ==========================================
 with tab3:
-    st.header("Tahap 3: Import & Ekstrak PDF (Tipe 1 - Hybrid)")
-    st.markdown("Gunakan menu ini untuk **file pertama** yang sudah berhasil sebelumnya (menggabungkan baris terpotong).")
+    st.header("Tahap 3: Import & Ekstrak PDF (Tipe 1)")
+    st.markdown("Digunakan untuk file yang terpotong barisnya. **Data di-filter ke 8 Kolom Standar.**")
     pdf_files_t1 = st.file_uploader("Upload File PDF Tipe 1", type=['pdf'], accept_multiple_files=True, key="t3_pdf")
 
     if st.button("Proses & Ekstrak PDF (Tipe 1)", type="primary"):
@@ -259,17 +402,14 @@ with tab3:
             all_extracted_dfs = []
             with st.spinner("Mengekstraksi data Tipe 1..."):
                 for uploaded_pdf in pdf_files_t1:
-                    with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp:
-                        tmp.write(uploaded_pdf.getvalue())
-                        tmp_path = tmp.name
+                    with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp: tmp.write(uploaded_pdf.getvalue()); tmp_path = tmp.name
                     try:
                         with pdfplumber.open(tmp_path) as pdf:
                             for page in pdf.pages:
                                 tables = get_pdf_tables_tipe1(page)
                                 for table in tables:
                                     df_hybrid = process_hybrid_table(table)
-                                    if df_hybrid is not None and not df_hybrid.empty:
-                                        all_extracted_dfs.append(df_hybrid)
+                                    if df_hybrid is not None and not df_hybrid.empty: all_extracted_dfs.append(df_hybrid)
                     finally:
                         if os.path.exists(tmp_path): os.remove(tmp_path)
 
@@ -279,42 +419,48 @@ with tab3:
                 st.dataframe(final_pdf_df.head(50), use_container_width=True)
                 st.download_button("📥 Download Excel Tipe 1 (.xlsx)", data=to_excel_bytes(final_pdf_df), file_name="Hasil_Ekstrak_PDF_Tipe1.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
             else:
-                st.warning("⚠️ Tidak ada data tabel yang terdeteksi dari PDF.")
+                st.warning("⚠️ Tidak ada data tabel yang terdeteksi.")
 
 # ==========================================
-# TAB 4: IMPORT & EKSTRAK PDF KE EXCEL (TIPE 2)
+# TAB 4: IMPORT & EKSTRAK PDF (TIPE 2 - SEMUA KOLOM)
 # ==========================================
 with tab4:
-    st.header("Tahap 4: Import & Ekstrak PDF (Tipe 2 - Standar)")
-    st.markdown("Gunakan menu ini untuk **file kedua** yang gagal di Tab 3 (membaca tabel standar bawaan).")
+    st.header("Tahap 4: Import & Ekstrak PDF (Tipe 2 - Semua Kolom)")
+    st.markdown("Digunakan untuk format PDF standar. **Mengekspor semua kolom utuh apa adanya.**")
     pdf_files_t2 = st.file_uploader("Upload File PDF Tipe 2", type=['pdf'], accept_multiple_files=True, key="t4_pdf")
 
-    if st.button("Proses & Ekstrak PDF (Tipe 2)", type="primary"):
+    if st.button("Proses & Ekstrak Semua Data (Tipe 2)", type="primary"):
         if not pdf_files_t2: st.error("Silakan unggah setidaknya satu file PDF.")
         elif not PDF_SUPPORT: st.error("Library `pdfplumber` belum di-install.")
         else:
             all_extracted_dfs = []
-            with st.spinner("Mengekstraksi data Tipe 2..."):
+            with st.spinner("Mengekstraksi semua data dari PDF..."):
                 for uploaded_pdf in pdf_files_t2:
-                    with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp:
-                        tmp.write(uploaded_pdf.getvalue())
-                        tmp_path = tmp.name
+                    with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp: tmp.write(uploaded_pdf.getvalue()); tmp_path = tmp.name
                     try:
                         with pdfplumber.open(tmp_path) as pdf:
                             for page in pdf.pages:
-                                # Menggunakan pengaturan standar tanpa memaksa strategi baris
                                 tables = page.extract_tables() 
                                 for table in tables:
                                     df_std = process_standard_table(table)
-                                    if df_std is not None and not df_std.empty:
-                                        all_extracted_dfs.append(df_std)
+                                    if df_std is not None and not df_std.empty: all_extracted_dfs.append(df_std)
                     finally:
                         if os.path.exists(tmp_path): os.remove(tmp_path)
 
             if all_extracted_dfs:
-                final_pdf_df = normalize_pdf_dataframe(pd.concat(all_extracted_dfs, ignore_index=True))
-                st.success(f"✅ Berhasil mengekstraksi {len(final_pdf_df)} baris data!")
+                # 1. Gabungkan semua tabel
+                final_pdf_df = pd.concat(all_extracted_dfs, ignore_index=True)
+                
+                # 2. Hapus baris-baris yang merupakan duplikasi Header dari halaman selanjutnya
+                if len(final_pdf_df.columns) > 0:
+                    first_col = final_pdf_df.columns[0]
+                    final_pdf_df = final_pdf_df[final_pdf_df[first_col] != first_col]
+                
+                # 3. Reset index agar rapi
+                final_pdf_df = final_pdf_df.reset_index(drop=True)
+
+                st.success(f"✅ Berhasil mengekstraksi {len(final_pdf_df)} baris dengan {len(final_pdf_df.columns)} kolom utuh!")
                 st.dataframe(final_pdf_df.head(50), use_container_width=True)
-                st.download_button("📥 Download Excel Tipe 2 (.xlsx)", data=to_excel_bytes(final_pdf_df), file_name="Hasil_Ekstrak_PDF_Tipe2.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                st.download_button("📥 Download Semua Data Tipe 2 (.xlsx)", data=to_excel_bytes(final_pdf_df), file_name="Hasil_Semua_Kolom_Tipe2.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", type="primary")
             else:
-                st.warning("⚠️ Tidak ada data tabel yang terdeteksi dari PDF. PDF mungkin hanya berisi teks tanpa format tabel.")
+                st.warning("⚠️ Tidak ada data tabel yang terdeteksi.")
