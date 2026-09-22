@@ -86,13 +86,10 @@ def get_pdf_tables(page):
     return []
 
 def is_new_record(row):
-    """Mengecek apakah baris memiliki 11-12 digit IDPEL secara akurat."""
-    for cell in row:
-        if cell:
-            digits = re.sub(r'\D', '', str(cell))
-            if 11 <= len(digits) <= 12:
-                return True
-    return False
+    """Mengecek apakah baris memiliki persis 11-12 digit angka berturut-turut (IDPEL)."""
+    row_str = " ".join([str(c) for c in row if c])
+    # Regex: Mencari angka 11 atau 12 digit, tidak didahului/diikuti angka lain
+    return bool(re.search(r'(?<!\d)\d{11,12}(?!\d)', row_str))
 
 def process_hybrid_table(table):
     if not table or len(table) < 1:
@@ -153,7 +150,8 @@ def process_hybrid_table(table):
                     val = str(row[i]).strip()
                     if val and val.upper() not in ['LAMA', 'BARU', '0', 'NONE']:
                         if valid_rows[-1][i]:
-                            if val not in valid_rows[-1][i]:  # Mencegah duplikasi kata
+                            # Mencegah penumpukan teks yang persis sama
+                            if not valid_rows[-1][i].endswith(val):
                                 valid_rows[-1][i] = (valid_rows[-1][i] + " " + val).strip()
                         else:
                             valid_rows[-1][i] = val
