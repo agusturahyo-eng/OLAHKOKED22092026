@@ -150,7 +150,7 @@ def to_excel_bytes(df):
 # ==========================================
 # ANTARMUKA STREAMLIT
 # ==========================================
-st.title("⚡ Aplikasi Pembanding & Distribusi Multi-File")
+st.title("⚡ Aplikasi Untuk Bikin Data Koked")
 st.markdown("Unggah file data di bawah ini, proses, lalu unduh hasilnya dalam satu file `.zip`.")
 
 col1, col2 = st.columns(2)
@@ -244,7 +244,7 @@ if st.button("Mulai Proses Data", type="primary"):
                 st.download_button(
                     label="📥 Download Hasil (.zip)",
                     data=zip_buffer.getvalue(),
-                    file_name="Hasil_Distribusi.zip",
+                    file_name="Hasil_Olah.zip",
                     mime="application/zip",
                     type="primary"
                 )
