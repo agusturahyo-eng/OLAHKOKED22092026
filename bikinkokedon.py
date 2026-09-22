@@ -85,31 +85,6 @@ def get_pdf_tables(page):
         pass
     return []
 
-def unpack_multiline_table(table):
-    """Membongkar sel tabel yang berisi newline (\\n) menjadi baris data terpisah."""
-    if not table:
-        return table
-    unpacked = []
-    for row in table:
-        if not row:
-            continue
-        has_newline = any('\n' in str(cell) for cell in row if cell)
-        if not has_newline:
-            unpacked.append(row)
-            continue
-        
-        split_cells = [str(cell).split('\n') if cell and str(cell) != 'None' else [''] for cell in row]
-        max_lines = max(len(sc) for sc in split_cells)
-        
-        for line_idx in range(max_lines):
-            sub_row = []
-            for sc in split_cells:
-                val = sc[line_idx].strip() if line_idx < len(sc) else ""
-                sub_row.append(val)
-            if any(sub_row):
-                unpacked.append(sub_row)
-    return unpacked
-
 def is_new_record(row):
     """Mengecek apakah baris memiliki persis 11-12 digit IDPEL."""
     row_str = " ".join([str(c) for c in row if c])
@@ -119,25 +94,23 @@ def process_hybrid_table(table):
     if not table or len(table) < 1:
         return None
 
-    # Membongkar sel bertumpuk sebelum pembersihan spasi
-    table = unpack_multiline_table(table)
-
+    # Bersihkan sel: gabungkan teks multiline (\n) menjadi 1 baris teks yang rapi
     cleaned_table = []
     for row in table:
-        cleaned_row = [re.sub(r'\s+', ' ', str(cell)).strip() if cell and str(cell) != 'None' else "" for cell in row]
+        cleaned_row = [" ".join(str(cell).split()) if cell and str(cell) != 'None' else "" for cell in row]
         if any(cleaned_row):
             cleaned_table.append(cleaned_row)
 
     if not cleaned_table:
         return None
 
-    header_keywords = ['ID PEL', 'IDPEL', 'NAMA', 'ALAMAT', 'TARIF', 'DAYA', 'AGENDA', 'REGISTER']
+    header_keywords = ['ID PEL', 'IDPEL', 'NOPEL', 'NAMA', 'ALAMAT', 'TARIF', 'DAYA', 'AGENDA', 'REGISTER']
     header_index = -1
 
     for idx, row in enumerate(cleaned_table[:10]):
         row_str = " ".join([re.sub(r'[^A-Z]', '', c.upper()) for c in row])
         matches = sum(1 for kw in header_keywords if re.sub(r'[^A-Z]', '', kw) in row_str)
-        if matches >= 2 or ('ID' in row_str and 'NAMA' in row_str):
+        if matches >= 2 or ('ID' in row_str and 'NAMA' in row_str) or ('NOPEL' in row_str and 'NAMA' in row_str):
             header_index = idx
             break
 
@@ -164,7 +137,7 @@ def process_hybrid_table(table):
     for row in data_rows:
         row_str = " ".join([c.upper() for c in row if c])
         
-        if ('ID PEL' in row_str or 'IDPEL' in row_str) and ('NAMA' in row_str or 'ALAMAT' in row_str):
+        if ('ID PEL' in row_str or 'IDPEL' in row_str or 'NOPEL' in row_str) and ('NAMA' in row_str or 'ALAMAT' in row_str):
             continue
         if 'TOTAL' in row_str or 'HALAMAN' in row_str:
             continue
@@ -197,14 +170,14 @@ def process_hybrid_table(table):
     return pd.DataFrame(padded_rows, columns=headers)
 
 def find_target_column(col_name):
-    """Pencocokan nama kolom otomatis dengan penghapusan spasi agresif."""
+    """Pencocokan nama kolom otomatis presisi."""
     col_clean = re.sub(r'[^A-Z0-9]', '', str(col_name).upper())
     
-    if 'IDPEL' in col_clean or 'NOPEL' in col_clean or 'ID' in col_clean:
+    if 'NOPEL' in col_clean or 'IDPEL' in col_clean or 'IDPELANGGAN' in col_clean or col_clean == 'ID' or col_clean == 'IDPEL':
         return 'IDPEL'
-    if 'NAMA' in col_clean or 'NAM' in col_clean or 'PELANGGAN' in col_clean:
+    if 'NAMAPEMOHON' in col_clean or 'NAMA' in col_clean or 'PELANGGAN' in col_clean:
         return 'NAMA'
-    if 'ALAMAT' in col_clean or 'ALM' in col_clean or 'LOKASI' in col_clean:
+    if 'ALAMATPEMOHON' in col_clean or 'ALAMAT' in col_clean or 'LOKASI' in col_clean:
         return 'ALAMAT'
     if 'TARIF' in col_clean or 'TARIP' in col_clean or 'GOL' in col_clean:
         return 'TARIF'
@@ -239,7 +212,17 @@ def normalize_pdf_dataframe(df):
     df.columns = new_cols
     df = df.loc[:, ~df.columns.duplicated(keep='first')]
 
-    # 2. Logika Fallback Posisi Kolom
+    # 2. Pemisahan TARIF/DAYA jika tergabung dalam satu kolom (misal: R1MT/900)
+    if 'TARIF' in df.columns:
+        for idx in df.index:
+            t_val = str(df.at[idx, 'TARIF']).strip()
+            if '/' in t_val:
+                parts = t_val.split('/')
+                df.at[idx, 'TARIF'] = parts[0].strip()
+                if len(parts) > 1 and (not 'DAYA' in df.columns or str(df.at[idx, 'DAYA']).strip() in ['', '0', '0.0']):
+                    df.at[idx, 'DAYA'] = parts[1].strip()
+
+    # 3. Logika Fallback Posisi Kolom
     if 'IDPEL' in df.columns:
         id_idx = df.columns.get_loc('IDPEL')
         
@@ -255,16 +238,16 @@ def normalize_pdf_dataframe(df):
                 if col_name not in ['TARIF', 'DAYA', 'GARDU', 'TIANG', 'KOKED']:
                     df = df.rename(columns={col_name: 'ALAMAT'})
 
-    # 3. Pemisahan IDPEL dan NAMA jika tergabung
+    # 4. Pemisahan IDPEL dan NAMA jika tergabung
     df = separate_idpel_and_nama(df)
 
-    # 4. Pastikan kolom dasar ada agar tidak error
+    # 5. Pastikan kolom dasar ada
     target_cols = ['IDPEL', 'NAMA', 'ALAMAT', 'TARIF', 'DAYA', 'GARDU', 'TIANG', 'KOKED']
     for col in target_cols:
         if col not in df.columns:
             df[col] = ""
 
-    # 5. Standarisasi Tipe Data & Pembersihan Teks
+    # 6. Standarisasi Tipe Data & Pembersihan Teks
     df['IDPEL'] = df['IDPEL'].apply(clean_idpel)
     df['DAYA'] = df['DAYA'].apply(clean_daya)
     
@@ -320,7 +303,8 @@ def baca_ekstrak_tabel(uploaded_file):
         'GOL TARIF': 'TARIP',
         'NAMAPNJ': 'ALAMAT',
         'ID PEL': 'IDPEL',
-        'ID_PELANGGAN': 'IDPEL'
+        'ID_PELANGGAN': 'IDPEL',
+        'NOPEL': 'IDPEL'
     })
     return df, fname
 
