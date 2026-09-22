@@ -36,7 +36,6 @@ def clean_idpel(val):
     s = str(val).strip()
     if s.endswith('.0'): s = s[:-2]
     
-    # Ambil hanya digit angka
     digits = re.sub(r'\D', '', s)
     if len(digits) >= 12:
         return digits[:12]
@@ -80,11 +79,9 @@ def process_hybrid_table(table):
         if not any(cleaned_row):
             continue
         
-        # Jika baris pertama ATAU kolom nomor/pertama terisi -> baris baru
         if not merged_rows or cleaned_row[0] != "":
             merged_rows.append(cleaned_row)
         else:
-            # Sambungkan teks terpotong ke baris di atasnya
             for i in range(len(cleaned_row)):
                 if cleaned_row[i] != "":
                     merged_rows[-1][i] = (merged_rows[-1][i] + " " + cleaned_row[i]).strip()
@@ -104,7 +101,6 @@ def normalize_pdf_dataframe(df):
     """Mencocokkan variasi header secara otomatis dan menyusun kolom target."""
     target_cols = ['IDPEL', 'NAMA', 'ALAMAT', 'TARIF', 'DAYA', 'GARDU', 'TIANG', 'KOKED']
     
-    # Pemetaan kata kunci header
     alias_map = {
         'IDPEL': ['IDPEL', 'ID PEL', 'ID PELANGGAN', 'ID_PELANGGAN', 'NO PELANGGAN', 'NOPEL', 'ID'],
         'NAMA': ['NAMA', 'NAMA PELANGGAN', 'NAMA_PELANGGAN', 'NAMAPNJ', 'PELANGGAN'],
@@ -128,12 +124,10 @@ def normalize_pdf_dataframe(df):
 
     df = df.rename(columns=rename_dict)
 
-    # Buat kolom target jika belum ada
     for col in target_cols:
         if col not in df.columns:
             df[col] = ""
 
-    # Bersihkan isi data
     df['IDPEL'] = df['IDPEL'].apply(clean_idpel)
     df['DAYA'] = df['DAYA'].apply(clean_daya)
 
@@ -158,26 +152,34 @@ def baca_ekstrak_tabel(uploaded_file):
                 if not PDF_SUPPORT:
                     st.error("Library pdfplumber belum terinstall.")
                     return pd.DataFrame(), fname
-                all_data, headers = [], None
+                all_pages_data = []
                 with pdfplumber.open(tmp_path) as pdf:
                     for page in pdf.pages:
-                        for table in page.extract_tables():
-                            for row in table:
-                                if not any(row): continue
-                                if headers is None: headers = [str(cell).strip().upper() if cell else '' for cell in row]
-                                else:
-                                    row_upper = [str(cell).strip().upper() if cell else '' for cell in row]
-                                    if 'IDPEL' in row_upper or 'KOKED' in row_upper or 'KDDK' in row_upper: continue
-                                    all_data.append(row)
-                df = pd.DataFrame([r[:len(headers)] for r in all_data], columns=headers)
+                        tables = page.extract_tables()
+                        for table in tables:
+                            df_tbl = process_hybrid_table(table)
+                            if df_tbl is not None and not df_tbl.empty:
+                                all_pages_data.append(df_tbl)
+                if all_pages_data:
+                    df = pd.concat(all_pages_data, ignore_index=True)
+                else:
+                    df = pd.DataFrame()
             else:
                 st.error(f"Format tidak didukung: {ext}")
                 return pd.DataFrame(), fname
         finally:
-            os.remove(tmp_path)
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
 
-    df.columns = df.columns.str.strip().str.upper()
-    df = df.rename(columns={'KDDK': 'KOKED', 'TARIF': 'TARIP', 'NAMAPNJ': 'ALAMAT'})
+    df.columns = df.columns.astype(str).str.strip().str.upper()
+    df = df.rename(columns={
+        'KDDK': 'KOKED', 
+        'TARIF': 'TARIP', 
+        'GOL TARIF': 'TARIP',
+        'NAMAPNJ': 'ALAMAT',
+        'ID PEL': 'IDPEL',
+        'ID_PELANGGAN': 'IDPEL'
+    })
     return df, fname
 
 def proses_list_file(files, tipe_data):
@@ -186,10 +188,17 @@ def proses_list_file(files, tipe_data):
         df, fname = baca_ekstrak_tabel(f)
         if df.empty: continue
         
-        if tipe_data == 'baru' or tipe_data == 'petugas':
+        # Penanganan kolom wajib secara rinci
+        if tipe_data in ['baru', 'petugas']:
             if 'ALAMAT' not in df.columns: df['ALAMAT'] = ''
-            for col in ['IDPEL', 'KOKED', 'TARIP', 'DAYA', 'NAMA']:
-                if col not in df.columns: raise ValueError(f"Kolom wajib '{col}' hilang di file {fname}")
+            if 'NAMA' not in df.columns: df['NAMA'] = ''
+            if 'TARIP' not in df.columns: df['TARIP'] = ''
+            if 'DAYA' not in df.columns: df['DAYA'] = 0
+            if 'KOKED' not in df.columns: df['KOKED'] = ''
+            
+            if 'IDPEL' not in df.columns: 
+                raise ValueError(f"Kolom wajib 'IDPEL' hilang di file {fname}")
+                
             df['IDPEL'] = df['IDPEL'].apply(clean_idpel)
             df['DAYA'] = df['DAYA'].apply(clean_daya)
             df['KOKED'] = df['KOKED'].astype(str).str.strip()
@@ -232,7 +241,6 @@ def to_excel_bytes(df):
 # ==========================================
 st.title("⚡ Aplikasi Olah Koked & Ekstrak PDF")
 
-# BIKIN TIGA TAB
 tab1, tab2, tab3 = st.tabs([
     "1️⃣ Tahap 1: Persiapan Data Petugas", 
     "2️⃣ Tahap 2: Rekap Pekerjaan & Mutasi KOKED",
@@ -277,7 +285,8 @@ with tab1:
                     kolom_export = ['IDPEL', 'KOKED', 'NAMA', 'ALAMAT', 'TARIP', 'DAYA']
                     zip_buffer = io.BytesIO()
                     
-                    with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED, False) as zip_file:
+                    # PERBAIKAN: Gunakan mode "w" untuk menulis ZIP baru di BytesIO
+                    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
                         if not df_pb.empty:
                             zip_file.writestr("PB_SEMUA_PETUGAS.xlsx", to_excel_bytes(df_pb[kolom_export]))
 
@@ -308,7 +317,7 @@ with tab1:
                     st.success("✅ File untuk petugas berhasil dibuat!")
                     st.download_button("📥 Download Distribusi Petugas (.zip)", data=zip_buffer.getvalue(), file_name="Hasil_PerPetugas.zip", mime="application/zip")
                 except Exception as e:
-                    st.error(f"❌ Error: {str(e)}")
+                    st.error(f"❌ Error Tahap 1: {str(e)}")
 
 # ==========================================
 # TAB 2: REKAP & PERUBAHAN KOKED
@@ -341,7 +350,8 @@ with tab2:
                     kolom_export = ['IDPEL', 'KOKED', 'NAMA', 'ALAMAT', 'TARIP', 'DAYA']
 
                     zip_buffer2 = io.BytesIO()
-                    with zipfile.ZipFile(zip_buffer2, "a", zipfile.ZIP_DEFLATED, False) as zip_file2:
+                    # PERBAIKAN: Mode "w" digunakan di sini
+                    with zipfile.ZipFile(zip_buffer2, "w", zipfile.ZIP_DEFLATED) as zip_file2:
                         if not df_changed.empty:
                             txt_content = (df_changed['IDPEL'].astype(str) + "|" + df_changed['KOKED_BARU'].astype(str)).tolist()
                             txt_string = "\n".join(txt_content)
@@ -404,19 +414,13 @@ with tab3:
                             os.remove(tmp_path)
 
             if all_extracted_dfs:
-                # Gabungkan semua data PDF
                 combined_raw_df = pd.concat(all_extracted_dfs, ignore_index=True)
-                
-                # Normalisasi Header dan Bersihkan IDPEL
                 final_pdf_df = normalize_pdf_dataframe(combined_raw_df)
 
                 st.success(f"✅ Berhasil mengekstraksi {len(final_pdf_df)} baris data dari {len(pdf_files)} file PDF!")
-                
-                # Tampilkan Preview Data
                 st.subheader("Preview Data Hasil Ekstraksi:")
                 st.dataframe(final_pdf_df.head(50), use_container_width=True)
 
-                # Tombol Download Excel
                 excel_data = to_excel_bytes(final_pdf_df)
                 st.download_button(
                     label="📥 Download Data Ekstraksi PDF (.xlsx)",
@@ -427,4 +431,3 @@ with tab3:
                 )
             else:
                 st.warning("⚠️ Tidak ada data atau tabel yang berhasil dideteksi dari file PDF yang diunggah.")
-
