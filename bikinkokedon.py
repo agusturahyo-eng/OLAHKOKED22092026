@@ -7,7 +7,7 @@ import zipfile
 import tempfile
 
 # --- PENGATURAN HALAMAN ---
-st.set_page_config(page_title="Aplikasi Rute Baca Meter", layout="wide")
+st.set_page_config(page_title="Aplikasi Olah Koked", layout="wide")
 
 # --- FUNGSI MENGONVERSI & MEMBERSIHKAN DAYA ---
 def clean_daya(val):
