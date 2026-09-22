@@ -6,6 +6,7 @@ import io
 import zipfile
 import tempfile
 import re
+import gc # Digunakan untuk membersihkan memori RAM pada file PDF besar
 
 # Library PDF
 try:
@@ -124,7 +125,6 @@ def process_standard_table(table):
 
     if len(cleaned_table) < 2: return None
 
-    # Cari header dinamis dari PDF
     header_index = 0
     header_keywords = ['ID PEL', 'IDPEL', 'NOPEL', 'NAMA', 'ALAMAT', 'NO', 'URUT', 'TANGGAL']
     for idx, row in enumerate(cleaned_table[:5]):
@@ -402,14 +402,17 @@ with tab3:
             all_extracted_dfs = []
             with st.spinner("Mengekstraksi data Tipe 1..."):
                 for uploaded_pdf in pdf_files_t1:
-                    with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp: tmp.write(uploaded_pdf.getvalue()); tmp_path = tmp.name
+                    with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp: 
+                        tmp.write(uploaded_pdf.getvalue())
+                        tmp_path = tmp.name
                     try:
                         with pdfplumber.open(tmp_path) as pdf:
                             for page in pdf.pages:
                                 tables = get_pdf_tables_tipe1(page)
                                 for table in tables:
                                     df_hybrid = process_hybrid_table(table)
-                                    if df_hybrid is not None and not df_hybrid.empty: all_extracted_dfs.append(df_hybrid)
+                                    if df_hybrid is not None and not df_hybrid.empty: 
+                                        all_extracted_dfs.append(df_hybrid)
                     finally:
                         if os.path.exists(tmp_path): os.remove(tmp_path)
 
@@ -422,7 +425,7 @@ with tab3:
                 st.warning("⚠️ Tidak ada data tabel yang terdeteksi.")
 
 # ==========================================
-# TAB 4: IMPORT & EKSTRAK PDF (TIPE 2 - SEMUA KOLOM)
+# TAB 4: IMPORT & EKSTRAK PDF (TIPE 2 - SEMUA KOLOM + MEMORI AMAN)
 # ==========================================
 with tab4:
     st.header("Tahap 4: Import & Ekstrak PDF (Tipe 2 - Semua Kolom)")
@@ -430,37 +433,65 @@ with tab4:
     pdf_files_t2 = st.file_uploader("Upload File PDF Tipe 2", type=['pdf'], accept_multiple_files=True, key="t4_pdf")
 
     if st.button("Proses & Ekstrak Semua Data (Tipe 2)", type="primary"):
-        if not pdf_files_t2: st.error("Silakan unggah setidaknya satu file PDF.")
-        elif not PDF_SUPPORT: st.error("Library `pdfplumber` belum di-install.")
+        if not pdf_files_t2: 
+            st.error("Silakan unggah setidaknya satu file PDF.")
+        elif not PDF_SUPPORT: 
+            st.error("Library `pdfplumber` belum di-install.")
         else:
             all_extracted_dfs = []
-            with st.spinner("Mengekstraksi semua data dari PDF..."):
+            error_pages = [] 
+            
+            with st.spinner("Mengekstraksi semua data dari PDF... (Ini mungkin memakan waktu untuk file besar)"):
                 for uploaded_pdf in pdf_files_t2:
-                    with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp: tmp.write(uploaded_pdf.getvalue()); tmp_path = tmp.name
+                    with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp: 
+                        tmp.write(uploaded_pdf.getvalue())
+                        tmp_path = tmp.name
+                        
                     try:
                         with pdfplumber.open(tmp_path) as pdf:
-                            for page in pdf.pages:
-                                tables = page.extract_tables() 
-                                for table in tables:
-                                    df_std = process_standard_table(table)
-                                    if df_std is not None and not df_std.empty: all_extracted_dfs.append(df_std)
+                            total_pages = len(pdf.pages)
+                            progress_bar = st.progress(0)
+                            
+                            for i, page in enumerate(pdf.pages):
+                                try:
+                                    tables = page.extract_tables() 
+                                    for table in tables:
+                                        df_std = process_standard_table(table)
+                                        if df_std is not None and not df_std.empty: 
+                                            all_extracted_dfs.append(df_std)
+                                except Exception as e:
+                                    error_pages.append(f"Halaman {i+1}: {str(e)}")
+                                
+                                # Update progress bar & bersihkan memori setiap halaman
+                                progress_bar.progress((i + 1) / total_pages)
+                                gc.collect() 
+                                
+                    except Exception as e:
+                        st.error(f"Gagal membuka file PDF: {str(e)}")
                     finally:
-                        if os.path.exists(tmp_path): os.remove(tmp_path)
+                        if os.path.exists(tmp_path): 
+                            os.remove(tmp_path)
 
             if all_extracted_dfs:
-                # 1. Gabungkan semua tabel
-                final_pdf_df = pd.concat(all_extracted_dfs, ignore_index=True)
-                
-                # 2. Hapus baris-baris yang merupakan duplikasi Header dari halaman selanjutnya
-                if len(final_pdf_df.columns) > 0:
-                    first_col = final_pdf_df.columns[0]
-                    final_pdf_df = final_pdf_df[final_pdf_df[first_col] != first_col]
-                
-                # 3. Reset index agar rapi
-                final_pdf_df = final_pdf_df.reset_index(drop=True)
+                try:
+                    final_pdf_df = pd.concat(all_extracted_dfs, ignore_index=True)
+                    
+                    if len(final_pdf_df.columns) > 0:
+                        first_col = final_pdf_df.columns[0]
+                        final_pdf_df = final_pdf_df[final_pdf_df[first_col] != first_col]
+                    
+                    final_pdf_df = final_pdf_df.reset_index(drop=True)
 
-                st.success(f"✅ Berhasil mengekstraksi {len(final_pdf_df)} baris dengan {len(final_pdf_df.columns)} kolom utuh!")
-                st.dataframe(final_pdf_df.head(50), use_container_width=True)
-                st.download_button("📥 Download Semua Data Tipe 2 (.xlsx)", data=to_excel_bytes(final_pdf_df), file_name="Hasil_Semua_Kolom_Tipe2.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", type="primary")
+                    st.success(f"✅ Berhasil mengekstraksi {len(final_pdf_df)} baris dengan {len(final_pdf_df.columns)} kolom utuh!")
+                    
+                    if error_pages:
+                        st.warning(f"⚠️ Ada {len(error_pages)} halaman yang dilewati karena error format.")
+                        with st.expander("Lihat Detail Error"):
+                            for err in error_pages: st.write(err)
+
+                    st.dataframe(final_pdf_df.head(50), use_container_width=True)
+                    st.download_button("📥 Download Semua Data Tipe 2 (.xlsx)", data=to_excel_bytes(final_pdf_df), file_name="Hasil_Semua_Kolom_Tipe2.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", type="primary")
+                except Exception as e:
+                    st.error(f"Gagal saat menggabungkan data: {str(e)}")
             else:
                 st.warning("⚠️ Tidak ada data tabel yang terdeteksi.")
