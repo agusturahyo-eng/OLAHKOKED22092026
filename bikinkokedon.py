@@ -73,9 +73,10 @@ def process_hybrid_table(table):
     if not table or len(table) < 2:
         return None
 
+    # 1. Bersihkan sel dan hilangkan spasi ganda/newline
     merged_rows = []
     for row in table:
-        cleaned_row = [str(cell).replace('\n', ' ').strip() if cell else "" for cell in row]
+        cleaned_row = [re.sub(r'\s+', ' ', str(cell)).strip() if cell else "" for cell in row]
         if not any(cleaned_row):
             continue
         
@@ -89,12 +90,27 @@ def process_hybrid_table(table):
     if not merged_rows:
         return None
 
+    # 2. Cari baris mana yang merupakan HEADER sesungguhnya (bukan kop surat/judul PLN)
+    header_index = 0
+    header_keywords = ['ID PEL', 'IDPEL', 'NAMA', 'ALAMAT', 'AGENDA', 'REGISTER', 'TARIF', 'DAYA']
+    
+    for idx, row in enumerate(merged_rows[:5]): # Periksa 5 baris pertama
+        row_str = " ".join([cell.upper() for cell in row])
+        matches = sum(1 for kw in header_keywords if kw in row_str)
+        if matches >= 2: # Jika ditemukan minimal 2 kata kunci header
+            header_index = idx
+            break
+
     headers = []
-    for i, h in enumerate(merged_rows[0]):
+    for i, h in enumerate(merged_rows[header_index]):
         val = h if h != "" else f"KOLOM_{i+1}"
         headers.append(val.upper())
         
-    df = pd.DataFrame(merged_rows[1:], columns=headers)
+    data_rows = merged_rows[header_index + 1:]
+    if not data_rows:
+        return None
+
+    df = pd.DataFrame(data_rows, columns=headers)
     return df
 
 def normalize_pdf_dataframe(df):
@@ -102,17 +118,18 @@ def normalize_pdf_dataframe(df):
     target_cols = ['IDPEL', 'NAMA', 'ALAMAT', 'TARIF', 'DAYA', 'GARDU', 'TIANG', 'KOKED']
     
     alias_map = {
-        'IDPEL': ['IDPEL', 'ID PEL', 'ID PELANGGAN', 'ID_PELANGGAN', 'NO PELANGGAN', 'NOPEL', 'ID'],
+        'IDPEL': ['ID PEL', 'IDPEL', 'ID_PEL', 'ID PELANGGAN', 'ID_PELANGGAN', 'NO PELANGGAN', 'NOPEL'],
         'NAMA': ['NAMA', 'NAMA PELANGGAN', 'NAMA_PELANGGAN', 'NAMAPNJ', 'PELANGGAN'],
         'ALAMAT': ['ALAMAT', 'ALAMAT PELANGGAN', 'ALAMAT_PELANGGAN', 'ALM'],
-        'TARIF': ['TARIF', 'TARIP', 'GOL TARIF', 'GOLTAR', 'GOL TARIP'],
-        'DAYA': ['DAYA', 'DAYA (VA)', 'KAPASITAS', 'VA'],
+        'TARIF': ['TARIF LAMA', 'TARIP LAMA', 'TARIF', 'TARIP', 'GOL TARIF', 'GOLTAR', 'GOL TARIP'],
+        'DAYA': ['DAYA LAMA', 'DAYA', 'DAYA (VA)', 'KAPASITAS', 'VA'],
         'GARDU': ['GARDU', 'NO GARDU', 'KODE GARDU', 'GD'],
         'TIANG': ['TIANG', 'NO TIANG', 'KODE TIANG', 'TG'],
         'KOKED': ['KOKED', 'KDDK', 'KODE KEDUDUKAN']
     }
 
-    current_cols = [str(c).strip().upper() for c in df.columns]
+    # Bersihkan nama kolom dari spasi ganda
+    current_cols = [re.sub(r'\s+', ' ', str(c)).strip().upper() for c in df.columns]
     df.columns = current_cols
 
     rename_dict = {}
@@ -123,6 +140,10 @@ def normalize_pdf_dataframe(df):
                 break
 
     df = df.rename(columns=rename_dict)
+
+    # Filter/buang baris header berulang dari halaman 2, 3, dst.
+    if 'IDPEL' in df.columns:
+        df = df[~df['IDPEL'].astype(str).str.upper().str.contains('ID PEL|IDPEL', na=False)]
 
     for col in target_cols:
         if col not in df.columns:
