@@ -138,7 +138,19 @@ def process_standard_table(table):
         val = str(h).strip() if str(h).strip() != "" else f"KOLOM_{i+1}"
         headers.append(val)
         
-    df = pd.DataFrame(cleaned_table[header_index+1:], columns=headers)
+    # --- ANTI-ERROR REINDEXING: Memastikan tidak ada nama kolom yang duplikat ---
+    seen = set()
+    unique_headers = []
+    for h in headers:
+        new_h = h
+        counter = 1
+        while new_h in seen:
+            new_h = f"{h}_{counter}" 
+            counter += 1
+        seen.add(new_h)
+        unique_headers.append(new_h)
+        
+    df = pd.DataFrame(cleaned_table[header_index+1:], columns=unique_headers)
     return df
 
 # --- FUNGSI NORMALISASI (HANYA DIGUNAKAN DI TAB 3) ---
@@ -466,10 +478,10 @@ with tab4:
                                 except Exception as e:
                                     error_pages.append(f"Halaman {i+1}: {str(e)}")
                                 finally:
-                                    # INI KUNCI UTAMA: Membersihkan cache pdfplumber setiap halaman agar RAM tidak jebol
+                                    # Membersihkan cache pdfplumber setiap halaman agar RAM tidak jebol
                                     page.flush_cache() 
                                 
-                                # Mengurangi beban update UI Browser Streamlit (Hanya update per 5 halaman atau di akhir)
+                                # Mengurangi beban update UI Browser Streamlit
                                 if (i + 1) % 5 == 0 or (i + 1) == total_pages:
                                     progress_bar.progress((i + 1) / total_pages)
                                     status_text.text(f"Memproses halaman {i+1} dari {total_pages}...")
