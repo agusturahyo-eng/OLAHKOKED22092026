@@ -94,7 +94,7 @@ def baca_ekstrak_tabel(uploaded_file):
 
         try:
             if ext == '.dbf':
-                # Menggunakan dbfread agar tidak error ModuleNotFoundError simpledbf
+                # Menggunakan dbfread agar tidak error
                 df = pd.DataFrame(iter(DBF(tmp_path, char_decode_errors='ignore')))
             elif ext == '.pdf':
                 try:
@@ -158,6 +158,10 @@ def baca_ekstrak_tabel(uploaded_file):
                 rename_dict[col] = 'KOKED'
                 
         df = df.rename(columns=rename_dict)
+        
+        # MENCEGAH ERROR KOLOM DUPLIKAT (Fix untuk Ambiguous Series Error)
+        df = df.loc[:, ~df.columns.duplicated(keep='first')]
+        
     return df, fname
 
 def proses_list_file(files, tipe_data):
