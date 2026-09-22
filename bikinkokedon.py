@@ -68,31 +68,18 @@ def fix_masked_info(df_baru, df_master, df_sup_pb):
     df_baru.loc[is_masked_alamat, 'ALAMAT'] = df_baru.loc[is_masked_alamat, 'IDPEL'].map(alamat_map).fillna(df_baru.loc[is_masked_alamat, 'ALAMAT'])
     return df_baru
 
-# --- LOGIKA EKSTRAKSI TABEL PDF DENGAN MULTI-STRATEGI ---
+# --- LOGIKA EKSTRAKSI TABEL PDF HYBRID ---
 def get_pdf_tables(page):
-    """Mencoba beberapa strategi ekstraksi tabel agar cocok dengan format PDF PLN."""
-    # Strategi 1: Bawaan pdfplumber
+    """Mengambil tabel dengan berbagai toleransi batas kolom PDF."""
     tables = page.extract_tables()
     if tables and len(tables) > 0 and any(len(t) > 1 for t in tables if t):
         return tables
     
-    # Strategi 2: Text Grid (cocok untuk PDF cetakan web tanpa garis tebal)
     try:
         tables = page.extract_tables({
             "vertical_strategy": "text",
             "horizontal_strategy": "text",
-            "snap_tolerance": 3,
-        })
-        if tables and len(tables) > 0 and any(len(t) > 1 for t in tables if t):
-            return tables
-    except Exception:
-        pass
-
-    # Strategi 3: Explicit Lines
-    try:
-        tables = page.extract_tables({
-            "vertical_strategy": "lines",
-            "horizontal_strategy": "text",
+            "intersection_y_tolerance": 5,
         })
         if tables and len(tables) > 0 and any(len(t) > 1 for t in tables if t):
             return tables
@@ -100,6 +87,11 @@ def get_pdf_tables(page):
         pass
 
     return []
+
+def is_new_record(row):
+    """Mengecek apakah baris memiliki 12-digit IDPEL (Data Baru)."""
+    row_str = " ".join([str(c) for c in row if c])
+    return bool(re.search(r'\b\d{11,12}\b', row_str))
 
 def process_hybrid_table(table):
     if not table or len(table) < 1:
@@ -114,56 +106,87 @@ def process_hybrid_table(table):
     if not cleaned_table:
         return None
 
-    # Cari posisi baris HEADER sesungguhnya (melewati kop PLN)
+    # 1. Cari Baris Header Utama
     header_keywords = ['ID PEL', 'IDPEL', 'NAMA', 'ALAMAT', 'TARIF', 'DAYA', 'AGENDA', 'REGISTER']
     header_index = -1
 
     for idx, row in enumerate(cleaned_table[:10]):
         row_str = " ".join([c.upper() for c in row])
         matches = sum(1 for kw in header_keywords if kw in row_str)
-        if matches >= 2 or ('ID PEL' in row_str and 'NAMA' in row_str) or ('IDPEL' in row_str and 'NAMA' in row_str):
+        if matches >= 2 or ('ID' in row_str and 'NAMA' in row_str):
             header_index = idx
             break
 
     if header_index == -1:
         header_index = 0
 
-    headers = []
-    for i, h in enumerate(cleaned_table[header_index]):
-        val = h if h != "" else f"KOLOM_{i+1}"
-        headers.append(val.upper())
+    header_row_1 = cleaned_table[header_index]
+    data_start_index = header_index + 1
 
-    data_rows = cleaned_table[header_index + 1:]
-    merged_rows = []
+    # 2. Cek apakah ada Sub-Header di baris berikutnya (misal: LAMA / BARU)
+    if header_index + 1 < len(cleaned_table):
+        next_row = cleaned_table[header_index + 1]
+        next_row_str = " ".join([c.upper() for c in next_row])
+        if not is_new_record(next_row) and any(k in next_row_str for k in ['LAMA', 'BARU', 'VA']):
+            combined_headers = []
+            for h1, h2 in zip(header_row_1, next_row):
+                combined = f"{h1} {h2}".strip()
+                combined_headers.append(combined)
+            header_row_1 = combined_headers
+            data_start_index = header_index + 2
+
+    headers = [h.upper() if h != "" else f"KOLOM_{i+1}" for i, h in enumerate(header_row_1)]
+
+    # 3. Proses Baris Data & Gabungkan Lanjutan Baris (Multi-line Address)
+    data_rows = cleaned_table[data_start_index:]
+    valid_rows = []
 
     for row in data_rows:
-        row_str = " ".join([c.upper() for c in row])
-        # Abaikan header berulang di halaman berikutnya
-        if ('ID PEL' in row_str or 'IDPEL' in row_str) and 'NAMA' in row_str:
+        row_str = " ".join([c.upper() for c in row if c])
+        
+        # Abaikan header berulang / footer
+        if ('ID PEL' in row_str or 'IDPEL' in row_str) and ('NAMA' in row_str or 'ALAMAT' in row_str):
+            continue
+        if 'TOTAL' in row_str or 'HALAMAN' in row_str:
             continue
 
-        if not merged_rows or any(row[:4]):
-            merged_rows.append(row)
+        if is_new_record(row):
+            valid_rows.append(list(row))
         else:
-            for i in range(min(len(row), len(merged_rows[-1]))):
-                if row[i]:
-                    merged_rows[-1][i] = (merged_rows[-1][i] + " " + row[i]).strip()
+            # Jika tidak ada IDPEL baru, gabungkan teks ke baris pelanggan sebelumnya
+            if valid_rows:
+                for i in range(min(len(row), len(valid_rows[-1]))):
+                    val = str(row[i]).strip()
+                    if val and val.upper() not in ['LAMA', 'BARU', '0']:
+                        if valid_rows[-1][i]:
+                            valid_rows[-1][i] = (valid_rows[-1][i] + " " + val).strip()
+                        else:
+                            valid_rows[-1][i] = val
 
-    if not merged_rows:
+    if not valid_rows:
         return pd.DataFrame(columns=headers)
 
-    df = pd.DataFrame(merged_rows, columns=headers)
-    return df
+    # Samakan panjang kolom
+    num_cols = len(headers)
+    padded_rows = []
+    for r in valid_rows:
+        if len(r) < num_cols:
+            r = r + [""] * (num_cols - len(r))
+        elif len(r) > num_cols:
+            r = r[:num_cols]
+        padded_rows.append(r)
+
+    return pd.DataFrame(padded_rows, columns=headers)
 
 def find_target_column(col_name):
-    """Pencocokan fleksibel untuk mendeteksi ID Pel, Nama, Alamat, Tarif Lama, Daya Lama dll."""
+    """Pencocokan nama kolom otomatis."""
     col_clean = re.sub(r'[^A-Z0-9\s]', '', str(col_name).upper()).strip()
     
-    if any(k in col_clean for k in ['IDPEL', 'ID PEL', 'ID_PEL', 'NO PELANGGAN', 'NOPEL']):
+    if any(k in col_clean for k in ['IDPEL', 'ID PEL', 'ID_PEL', 'NO PELANGGAN', 'NOPEL', 'IDPELANGGAN']):
         return 'IDPEL'
-    if any(k in col_clean for k in ['NAMA PELANGGAN', 'NAMA_PELANGGAN', 'NAMAPNJ']) or col_clean == 'NAMA':
+    if any(k in col_clean for k in ['NAMA PELANGGAN', 'NAMA_PELANGGAN', 'NAMAPNJ', 'NAMA PEL']) or col_clean == 'NAMA':
         return 'NAMA'
-    if 'ALAMAT' in col_clean or col_clean == 'ALM':
+    if any(k in col_clean for k in ['ALAMAT PELANGGAN', 'ALAMAT_PELANGGAN', 'ALAMAT', 'ALM']):
         return 'ALAMAT'
     if any(k in col_clean for k in ['TARIF', 'TARIP', 'GOLTAR', 'GOL TARIF']):
         return 'TARIF'
@@ -177,20 +200,28 @@ def find_target_column(col_name):
         return 'KOKED'
     return col_name
 
+def separate_idpel_and_nama(df):
+    """Jika IDPEL dan NAMA tergabung dalam satu sel, pisahkan secara otomatis."""
+    if 'IDPEL' in df.columns:
+        for idx in df.index:
+            val = str(df.at[idx, 'IDPEL']).strip()
+            match = re.match(r'^(\d{11,12})\s+(.+)$', val)
+            if match:
+                df.at[idx, 'IDPEL'] = match.group(1)
+                nama_val = str(df.at[idx, 'NAMA']).strip() if 'NAMA' in df.columns else ''
+                if not nama_val or nama_val == 'None':
+                    df.at[idx, 'NAMA'] = match.group(2)
+    return df
+
 def normalize_pdf_dataframe(df):
     if df is None or df.empty:
         return pd.DataFrame(columns=['IDPEL', 'NAMA', 'ALAMAT', 'TARIF', 'DAYA', 'GARDU', 'TIANG', 'KOKED'])
 
-    # Pemetaan header otomatis
     new_cols = [find_target_column(c) for c in df.columns]
     df.columns = new_cols
 
-    # Hilangkan kolom duplikat jika ada dua kolom terpetakan sama
     df = df.loc[:, ~df.columns.duplicated(keep='first')]
-
-    # Hapus baris teks header yang tersisa di dalam data
-    if 'IDPEL' in df.columns:
-        df = df[~df['IDPEL'].astype(str).str.upper().str.contains('ID PEL|IDPEL|AGENDA|REGISTER|NO AGENDA', na=False)]
+    df = separate_idpel_and_nama(df)
 
     target_cols = ['IDPEL', 'NAMA', 'ALAMAT', 'TARIF', 'DAYA', 'GARDU', 'TIANG', 'KOKED']
     for col in target_cols:
@@ -200,7 +231,10 @@ def normalize_pdf_dataframe(df):
     df['IDPEL'] = df['IDPEL'].apply(clean_idpel)
     df['DAYA'] = df['DAYA'].apply(clean_daya)
 
-    return df[target_cols]
+    # Hapus baris kosong / baris header tersisa
+    df = df[df['IDPEL'].astype(str).str.strip() != ''].copy()
+
+    return df[target_cols].reset_index(drop=True)
 
 # --- FUNGSI PEMBACA FILE UMUM ---
 def baca_ekstrak_tabel(uploaded_file):
