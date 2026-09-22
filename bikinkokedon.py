@@ -419,6 +419,22 @@ with tab3:
 
                 st.success(f"✅ Berhasil mengekstraksi {len(final_pdf_df)} baris data dari {len(pdf_files)} file PDF!")
                 st.subheader("Preview Data Hasil Ekstraksi:")
+                kolom_baru = []
+for kolom in final_pdf_df.columns:
+    nama_kolom = str(kolom) # Pastikan nama kolom berformat string
+    if nama_kolom in kolom_baru:
+        i = 1
+        while f"{nama_kolom}_{i}" in kolom_baru:
+            i += 1
+        kolom_baru.append(f"{nama_kolom}_{i}")
+    else:
+        kolom_baru.append(nama_kolom)
+
+# 2. Terapkan nama kolom yang sudah unik ke dataframe
+final_pdf_df.columns = kolom_baru
+
+# 3. Baris asli Anda yang sebelumnya eror (sekarang akan berjalan normal)
+st.dataframe(final_pdf_df.head(50), use_container_width=True)
                 st.dataframe(final_pdf_df.head(50), use_container_width=True)
 
                 excel_data = to_excel_bytes(final_pdf_df)
