@@ -6,7 +6,7 @@ import io
 import zipfile
 import tempfile
 import re
-import gc # Digunakan untuk membersihkan memori RAM pada file PDF besar
+import gc # Untuk garbage collection
 
 # Library PDF
 try:
@@ -413,6 +413,7 @@ with tab3:
                                     df_hybrid = process_hybrid_table(table)
                                     if df_hybrid is not None and not df_hybrid.empty: 
                                         all_extracted_dfs.append(df_hybrid)
+                                page.flush_cache() # Hapus cache memori
                     finally:
                         if os.path.exists(tmp_path): os.remove(tmp_path)
 
@@ -425,7 +426,7 @@ with tab3:
                 st.warning("⚠️ Tidak ada data tabel yang terdeteksi.")
 
 # ==========================================
-# TAB 4: IMPORT & EKSTRAK PDF (TIPE 2 - SEMUA KOLOM + MEMORI AMAN)
+# TAB 4: IMPORT & EKSTRAK PDF (TIPE 2 - SEMUA KOLOM + ANTI CRASH)
 # ==========================================
 with tab4:
     st.header("Tahap 4: Import & Ekstrak PDF (Tipe 2 - Semua Kolom)")
@@ -441,7 +442,7 @@ with tab4:
             all_extracted_dfs = []
             error_pages = [] 
             
-            with st.spinner("Mengekstraksi semua data dari PDF... (Ini mungkin memakan waktu untuk file besar)"):
+            with st.spinner("🚀 Sedang mengekstraksi PDF besar... (Mohon jangan tutup/pindah halaman ini)"):
                 for uploaded_pdf in pdf_files_t2:
                     with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp: 
                         tmp.write(uploaded_pdf.getvalue())
@@ -450,7 +451,10 @@ with tab4:
                     try:
                         with pdfplumber.open(tmp_path) as pdf:
                             total_pages = len(pdf.pages)
+                            
+                            # Menggunakan st.empty() agar tampilan tidak freeze
                             progress_bar = st.progress(0)
+                            status_text = st.empty()
                             
                             for i, page in enumerate(pdf.pages):
                                 try:
@@ -461,10 +465,15 @@ with tab4:
                                             all_extracted_dfs.append(df_std)
                                 except Exception as e:
                                     error_pages.append(f"Halaman {i+1}: {str(e)}")
+                                finally:
+                                    # INI KUNCI UTAMA: Membersihkan cache pdfplumber setiap halaman agar RAM tidak jebol
+                                    page.flush_cache() 
                                 
-                                # Update progress bar & bersihkan memori setiap halaman
-                                progress_bar.progress((i + 1) / total_pages)
-                                gc.collect() 
+                                # Mengurangi beban update UI Browser Streamlit (Hanya update per 5 halaman atau di akhir)
+                                if (i + 1) % 5 == 0 or (i + 1) == total_pages:
+                                    progress_bar.progress((i + 1) / total_pages)
+                                    status_text.text(f"Memproses halaman {i+1} dari {total_pages}...")
+                                    gc.collect() # Panggil Garbage Collector
                                 
                     except Exception as e:
                         st.error(f"Gagal membuka file PDF: {str(e)}")
