@@ -729,30 +729,30 @@ with tab6:
 with tab7:
     st.header("Tahap 7: Info Data & Lokasi Pelanggan")
     
-    # Link tersimpan otomatis di latar belakang
     sheet_url = "https://docs.google.com/spreadsheets/d/1Po-6B5KvYY0uGBnqeVSocifwe6FBnDvecpf2a_JzvN0/edit?usp=sharing"
     
-    @st.cache_data(ttl=600)
+    # Fungsi pembacaan data super aman (semua NaN diubah jadi teks kosong '')
+    @st.cache_data(ttl=300)
     def load_data_gsheet(url):
         csv_url = re.sub(r'/edit.*', '/export?format=csv', url)
-        # Membaca semua data sebagai tipe String murni
-        return pd.read_csv(csv_url, dtype=str)
+        df = pd.read_csv(csv_url, dtype=str)
+        return df.fillna('') # Mengubah semua nilai kosong/NaN menjadi string kosong ''
 
     try:
         with st.spinner("Menghubungkan ke Database..."):
             df_sheet = load_data_gsheet(sheet_url)
             
-        with st.form(key="search_form_android_v3"):
+        with st.form(key="search_form_v4"):
             kategori = st.selectbox("🎯 Pilih Dasar Pencarian:", ["IDPEL", "NAMA", "NOMOR METER", "SEMUA KOLOM"])
-            search_query = st.text_input(f"🔍 Masukkan {kategori}:")
+            search_query = st.text_input("🔍 Masukkan Kata Kunci Pencarian:")
             submit_button = st.form_submit_button("🔍 Cari Data Sekarang", type="primary", use_container_width=True)
         
         if submit_button and search_query:
             query_clean = str(search_query).strip().lower()
             
-            # 1. Menentukan Kolom Target Berdasarkan Pilihan
+            # Filter kolom pencarian berdasarkan pilihan
             if kategori == "IDPEL":
-                target_cols = [c for c in df_sheet.columns if any(k in str(c).upper() for k in ['IDPEL', 'ID PEL', 'ID'])]
+                target_cols = [c for c in df_sheet.columns if any(k in str(c).upper() for k in ['IDPEL', 'ID'])]
             elif kategori == "NAMA":
                 target_cols = [c for c in df_sheet.columns if 'NAMA' in str(c).upper()]
             elif kategori == "NOMOR METER":
@@ -760,50 +760,39 @@ with tab7:
             else:
                 target_cols = list(df_sheet.columns)
             
-            # Jika nama kolom spesifik tidak ditemukan, gunakan semua kolom
             if not target_cols:
                 target_cols = list(df_sheet.columns)
-
-            # 2. Filtering Aman (Anti-Error Float & Anti-Crash)
-            masks = []
+            
+            # Pencarian aman per kolom tanpa fungsi join
+            mask = pd.Series(False, index=df_sheet.index)
             for col in target_cols:
-                mask_col = df_sheet[col].fillna('').astype(str).str.lower().str.contains(query_clean, na=False, regex=False)
-                masks.append(mask_col)
+                mask = mask | df_sheet[col].astype(str).str.lower().str.contains(query_clean, regex=False)
             
-            # Gabungkan hasil pencarian antar kolom dengan logika OR (|)
-            final_mask = pd.concat(masks, axis=1).any(axis=1)
-            hasil = df_sheet[final_mask]
+            hasil = df_sheet[mask]
             
-            # 3. Menampilkan Hasil
             if not hasil.empty:
                 st.write(f"**Ditemukan {len(hasil)} data:**")
                 
                 for idx, row in hasil.iterrows():
-                    # Menentukan judul header kotak
+                    # Judul Header Baris
                     id_col = next((c for c in df_sheet.columns if 'ID' in str(c).upper()), df_sheet.columns[0])
                     nama_col = next((c for c in df_sheet.columns if 'NAMA' in str(c).upper()), None)
                     
-                    val_id = str(row[id_col]) if pd.notna(row[id_col]) else "Detail"
-                    title_str = f"👤 {val_id}"
+                    id_val = str(row[id_col]) if row[id_col] != '' else "Detail"
+                    nama_val = f" - {row[nama_col]}" if nama_col and row[nama_col] != '' else ""
                     
-                    if nama_col and pd.notna(row[nama_col]):
-                        title_str += f" - {row[nama_col]}"
-                        
-                    with st.expander(title_str):
+                    with st.expander(f"👤 {id_val}{nama_val}"):
                         for col in df_sheet.columns:
                             st.write(f"**{col}:** {row[col]}")
                         
                         # Deteksi Angka Koordinat (Latitude & Longitude)
                         lat_val, lon_val = None, None
-                        
                         for col in df_sheet.columns:
                             val_str = str(row[col]).strip().replace(',', '.')
                             try:
                                 num_val = float(val_str)
-                                # Latitude Indonesia (-11 s/d 6)
                                 if -11.0 <= num_val <= 6.0 and lat_val is None:
                                     lat_val = str(num_val)
-                                # Longitude Indonesia (95 s/d 141)
                                 elif 95.0 <= num_val <= 141.0 and lon_val is None:
                                     lon_val = str(num_val)
                             except ValueError:
