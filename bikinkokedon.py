@@ -728,27 +728,29 @@ with tab6:
 # ==========================================
 with tab7:
     st.header("Tahap 7: Info Data & Lokasi Pelanggan")
-    st.markdown("Cari data pelanggan dari Google Sheets dan buka lokasi langsung ke Google Maps.")
-    st.info("💡 **PENTING:** Pastikan link Google Sheet Anda sudah diset ke **'Anyone with the link'** (Siapa saja yang memiliki link dapat melihat).")
     
-    sheet_url = st.text_input("🔗 Masukkan Link Google Sheet:", placeholder="https://docs.google.com/spreadsheets/d/1Po-6B5KvYY0uGBnqeVSocifwe6FBnDvecpf2a_JzvN0/edit?usp=sharing")
+    # 1. LINK DIBUAT OTOMATIS (Default Value dari Sheet Anda)
+    default_url = "https://docs.google.com/spreadsheets/d/1Po-6B5KvYY0uGBnqeVSocifwe6FBnDvecpf2a_JzvN0/edit?usp=sharing"
+    sheet_url = st.text_input("🔗 Link Google Sheet (Sudah tersimpan otomatis):", value=default_url)
     
+    # Fungsi cache agar loading data HANYA SEKALI, pencarian jadi super cepat
+    @st.cache_data(ttl=600) # Cache disimpan selama 10 menit
+    def load_data_gsheet(url):
+        csv_url = re.sub(r'/edit.*', '/export?format=csv', url)
+        return pd.read_csv(csv_url, dtype=str)
+
     if sheet_url:
-        # Mengubah link Google Sheet menjadi link download CSV agar bisa dibaca Pandas
-        csv_url = re.sub(r'/edit.*', '/export?format=csv', sheet_url)
-        
         try:
-            with st.spinner("Memuat data dari Google Sheets..."):
-                # Membaca data tanpa login
-                df_sheet = pd.read_csv(csv_url, dtype=str)
+            with st.spinner("Memuat data dari Google Sheets... (Hanya butuh waktu beberapa detik di awal)"):
+                df_sheet = load_data_gsheet(sheet_url)
                 
-            st.success("✅ Data berhasil terhubung!")
+            st.success("✅ Data berhasil terhubung dan siap dicari!")
             
-            # Kolom Pencarian
+            # 2. PENCARIAN DIPERCEPAT (Tanpa loading lambat)
             search_query = st.text_input("🔍 Cari berdasarkan IDPEL / Nama / Nomor Meter:")
             
-           if search_query:
-                # Filter data metode cepat (Vectorized)
+            if search_query:
+                # Metode filter Vectorized (jauh lebih cepat)
                 gabungan_teks = df_sheet.astype(str).agg(' '.join, axis=1)
                 hasil = df_sheet[gabungan_teks.str.contains(search_query, case=False, na=False)]
                 
@@ -756,33 +758,32 @@ with tab7:
                     st.write(f"**Ditemukan {len(hasil)} data:**")
                     
                     for idx, row in hasil.iterrows():
-                        # Mengambil IDPEL dan Nama untuk judul box
                         judul_id = row.get('IDPEL', row.get('ID PELANGGAN', 'Unknown ID'))
                         judul_nama = row.get('NAMA', row.get('NAMA PELANGGAN', 'Unknown Nama'))
                         
                         with st.expander(f"👤 {judul_id} - {judul_nama}"):
-                            # Menampilkan semua informasi kolom
                             for col in df_sheet.columns:
                                 st.write(f"**{col}:** {row[col]}")
                             
-                            # Deteksi otomatis kolom koordinat (Latitude & Longitude)
-                            lat_col = next((c for c in df_sheet.columns if c.upper() in ['LATITUDE', 'LAT', 'LATITUD']), None)
-                            lon_col = next((c for c in df_sheet.columns if c.upper() in ['LONGITUDE', 'LONG', 'LON', 'LNG']), None)
+                            # 3. PENYESUAIAN KOORDINAT X DAN Y
+                            # Latitude = Y (Utara/Selatan), Longitude = X (Timur/Barat)
+                            lat_col = next((c for c in df_sheet.columns if str(c).upper().strip() in ['LATITUDE', 'LAT', 'KOORDINAT Y', 'KOORDINATY', 'Y']), None)
+                            lon_col = next((c for c in df_sheet.columns if str(c).upper().strip() in ['LONGITUDE', 'LON', 'LNG', 'KOORDINAT X', 'KOORDINATX', 'X']), None)
                             
                             if lat_col and lon_col:
-                                lat = str(row[lat_col]).strip()
-                                lon = str(row[lon_col]).strip()
+                                lat = str(row[lat_col]).strip().replace(',', '.')
+                                lon = str(row[lon_col]).strip().replace(',', '.')
                                 
-                                # Pastikan data koordinat bukan kosong atau NaN
-                                if lat.replace('.', '', 1).replace('-', '', 1).isdigit() and lon.replace('.', '', 1).replace('-', '', 1).isdigit():
+                                # Memastikan isi sel memiliki angka sebelum memunculkan tombol maps
+                                if re.search(r'\d', lat) and re.search(r'\d', lon):
                                     maps_url = f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
                                     st.link_button("📍 Buka Lokasi di Google Maps", maps_url, type="primary")
                                 else:
-                                    st.warning("⚠️ Data koordinat untuk pelanggan ini kosong atau formatnya salah.")
+                                    st.warning("⚠️ Data koordinat untuk pelanggan ini kosong atau bukan angka.")
                             else:
-                                st.warning("⚠️ Tidak menemukan kolom 'Latitude' dan 'Longitude' di Google Sheet Anda.")
+                                st.warning("⚠️ Tidak menemukan kolom 'Koordinat X' dan 'Koordinat Y' di Google Sheet Anda.")
                 else:
                     st.warning("❌ Data tidak ditemukan.")
                     
         except Exception as e:
-            st.error(f"Gagal memuat Google Sheet. Pastikan link benar dan aksesnya sudah Public (Anyone with the link). Error: {str(e)}")
+            st.error(f"Gagal memuat Google Sheet. Pastikan link benar. Error: {str(e)}")
