@@ -731,7 +731,7 @@ with tab7:
     st.markdown("Cari data pelanggan dari Google Sheets dan buka lokasi langsung ke Google Maps.")
     st.info("💡 **PENTING:** Pastikan link Google Sheet Anda sudah diset ke **'Anyone with the link'** (Siapa saja yang memiliki link dapat melihat).")
     
-    sheet_url = st.text_input("🔗 Masukkan Link Google Sheet:", placeholder="https://docs.google.com/spreadsheets/d/..../edit")
+    sheet_url = st.text_input("🔗 Masukkan Link Google Sheet:", placeholder="https://docs.google.com/spreadsheets/d/1Po-6B5KvYY0uGBnqeVSocifwe6FBnDvecpf2a_JzvN0/edit?usp=sharing")
     
     if sheet_url:
         # Mengubah link Google Sheet menjadi link download CSV agar bisa dibaca Pandas
