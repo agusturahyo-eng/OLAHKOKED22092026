@@ -470,21 +470,27 @@ with tab4:
                             
                            for i, page in enumerate(pdf.pages):
                                 try:
-                                    # --- FITUR ANTI WATERMARK ---
+                                    # --- FITUR ANTI WATERMARK (VERSI LEBIH KETAT) ---
                                     def filter_watermark(obj):
                                         if obj.get("object_type") == "char":
-                                            # Hapus teks miring / diagonal (biasanya watermark)
-                                            if not obj.get("upright", True):
+                                            # 1. Filter Ukuran: Teks tabel kecil (8-10pt). Watermark jauh lebih besar.
+                                            # Buang semua teks yang ukurannya lebih dari 12pt.
+                                            if obj.get("size", 0) > 12:
                                                 return False
-                                            # Hapus teks raksasa (ukuran font > 30)
-                                            if obj.get("size", 0) > 30:
+                                                
+                                            # 2. Filter Transparansi (Alpha): Buang teks yang agak tembus pandang/pudar.
+                                            if obj.get("non_stroking_alpha", 1) < 1:
+                                                return False
+                                                
+                                            # 3. Filter Kemiringan (Berjaga-jaga)
+                                            if not obj.get("upright", True):
                                                 return False
                                         return True
                                     
-                                    # Terapkan filter ke halaman sebelum diekstrak
+                                    # Terapkan filter ke halaman
                                     clean_page = page.filter(filter_watermark)
                                     tables = clean_page.extract_tables() 
-                                    # -----------------------------
+                                    # ------------------------------------------------
                                     
                                     for table in tables:
                                         df_std = process_standard_table(table)
