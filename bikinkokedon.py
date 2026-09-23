@@ -828,7 +828,7 @@ with tab7:
 # ==========================================
 with tab8:
     st.header("Tahap 8: Update Master Data Pelanggan (Versi 2)")
-    st.write("Meng-update data master lama dengan data baru berdasarkan IDPEL. Data bersimbol bintang ( * ) tidak akan menimpa data master.")
+    st.write("Mengisi kolom yang KOSONG di Data Lama dengan data dari Data Baru berdasarkan IDPEL. Data yang sudah terisi TIDAK akan ditimpa.")
     st.markdown("---")
 
     # --- KOLOM UPLOAD FILE ---
@@ -847,11 +847,11 @@ with tab8:
         else:
             with st.spinner("Sedang memproses data..."):
                 try:
-                    # 1. Membaca file Excel dan memaksa semua kolom dibaca sebagai Teks (String)
+                    # 1. Membaca file Excel dan memaksa semua kolom dibaca sebagai Teks
                     df_lama = pd.read_excel(file_lama, dtype=str)
                     df_baru = pd.read_excel(file_baru, dtype=str)
 
-                    # Standardisasi nama kolom menjadi huruf kecil semua agar tidak error jika ada perbedaan kapital
+                    # Standardisasi nama kolom menjadi huruf kecil
                     df_lama.columns = df_lama.columns.str.lower()
                     df_baru.columns = df_baru.columns.str.lower()
 
@@ -859,24 +859,31 @@ with tab8:
                     if 'idpel' not in df_lama.columns or 'idpel' not in df_baru.columns:
                         st.error("❌ Error: Pastikan kedua file memiliki kolom bernama 'IDPEL' (atau 'idpel').")
                     else:
-                        # --- PERBAIKAN ERROR: MENGHAPUS DUPLIKAT IDPEL ---
-                        # Menghapus duplikat IDPEL agar index tidak ganda.
-                        # keep='last' berarti jika ada idpel ganda, data paling bawah (terbaru) yang akan dipertahankan
+                        # --- STANDARISASI SEL KOSONG ---
+                        # Mengubah string kosong (''), teks 'nan', atau spasi menjadi tipe data NaN sesungguhnya
+                        df_lama = df_lama.replace(r'^\s*$', np.nan, regex=True).replace(['nan', 'NaN', 'None'], np.nan)
+                        df_baru = df_baru.replace(r'^\s*$', np.nan, regex=True).replace(['nan', 'NaN', 'None'], np.nan)
+
+                        # Menghapus duplikat idpel agar tidak error index
                         df_lama.drop_duplicates(subset=['idpel'], keep='last', inplace=True)
                         df_baru.drop_duplicates(subset=['idpel'], keep='last', inplace=True)
 
-                        # 2. LOGIKA UPDATE DATA
+                        # 2. LOGIKA UPDATE DATA (HANYA MENGISI YANG KOSONG)
                         df_lama.set_index('idpel', inplace=True)
                         df_baru.set_index('idpel', inplace=True)
 
-                        # Fungsi update(): akan memperbarui nilai di df_lama dengan nilai dari df_baru yang idpel-nya cocok
-                        df_lama.update(df_baru)
+                        # KUNCI PERUBAHAN: overwrite=False membuat fungsi ini HANYA mengisi sel yang bernilai NaN
+                        df_lama.update(df_baru, overwrite=False)
                         
                         # Kembalikan idpel menjadi kolom biasa
                         df_hasil = df_lama.reset_index()
 
+                        # Karena tipe datanya tadi diubah ke string, jika ada kolom yang masih kosong mungkin berubah jadi kata "nan" lagi saat ditampilkan
+                        # Kita bersihkan lagi agar saat di-download tampilannya rapi
+                        df_hasil = df_hasil.fillna("")
+
                         # 3. MENAMPILKAN HASIL
-                        st.success("✅ Master Data berhasil diupdate!")
+                        st.success("✅ Master Data berhasil diupdate (hanya mengisi kolom yang kosong)!")
                         st.write("Preview Hasil Update:")
                         st.dataframe(df_hasil.head(10), use_container_width=True)
 
@@ -890,10 +897,12 @@ with tab8:
                         st.download_button(
                             label="⬇️ Download Hasil Update Excel",
                             data=hasil_excel,
-                            file_name="Master_Data_Updated_v2.xlsx",
+                            file_name="Master_Data_Updated_Hanya_Isi_Kosong.xlsx",
                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                             key="t8_download"
                         )
 
+                except Exception as e:
+                    st.error(f"❌ Terjadi kesalahan saat memproses data: {e}")
                 except Exception as e:
                     st.error(f"❌ Terjadi kesalahan saat memproses data: {e}")
