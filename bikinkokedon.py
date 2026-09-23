@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 from dbfread import DBF
 import os
 import io
@@ -16,7 +17,7 @@ except ImportError:
     PDF_SUPPORT = False
 
 # --- PENGATURAN HALAMAN ---
-st.set_page_config(page_title="Aplikasi Olah Koked & Ekstrak PDF", layout="wide")
+st.set_page_config(page_title="Aplikasi Olah Data & Ekstrak PDF", layout="wide")
 
 # --- FUNGSI MEMBERSIHKAN DAYA & IDPEL ---
 def clean_daya(val):
@@ -301,13 +302,15 @@ def to_excel_bytes(df):
 # ==========================================
 # ANTARMUKA STREAMLIT
 # ==========================================
-st.title("⚡ Aplikasi Olah Koked & Ekstrak PDF")
+st.title("⚡ Aplikasi Olah Data & Ekstrak PDF / ICONPRN")
 
-tab1, tab2, tab3, tab4 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
     "1️⃣ Tahap 1: Persiapan Data", 
     "2️⃣ Tahap 2: Mutasi KOKED",
-    "3️⃣ Tahap 3: PDF (Tipe 1 - Filter Kolom)",
-    "4️⃣ Tahap 4: PDF (Tipe 2 - Semua Kolom)"
+    "3️⃣ Tahap 3: PDF (Tipe 1)",
+    "4️⃣ Tahap 4: PDF (Tipe 2)",
+    "5️⃣ Tahap 5: Rekap Data ICONPRN",
+    "6️⃣ Tahap 6: Update Master Data"
 ])
 
 # ==========================================
@@ -425,7 +428,7 @@ with tab3:
                                     df_hybrid = process_hybrid_table(table)
                                     if df_hybrid is not None and not df_hybrid.empty: 
                                         all_extracted_dfs.append(df_hybrid)
-                                page.flush_cache() # Hapus cache memori
+                                page.flush_cache()
                     finally:
                         if os.path.exists(tmp_path): os.remove(tmp_path)
 
@@ -438,7 +441,7 @@ with tab3:
                 st.warning("⚠️ Tidak ada data tabel yang terdeteksi.")
 
 # ==========================================
-# TAB 4: IMPORT & EKSTRAK PDF (TIPE 2 - SEMUA KOLOM + ANTI CRASH)
+# TAB 4: IMPORT & EKSTRAK PDF (TIPE 2)
 # ==========================================
 with tab4:
     st.header("Tahap 4: Import & Ekstrak PDF (Tipe 2 - Semua Kolom)")
@@ -454,7 +457,7 @@ with tab4:
             all_extracted_dfs = []
             error_pages = [] 
             
-            with st.spinner("🚀 Sedang mengekstraksi PDF besar... (Mohon jangan tutup/pindah halaman ini)"):
+            with st.spinner("🚀 Sedang mengekstraksi PDF besar..."):
                 for uploaded_pdf in pdf_files_t2:
                     with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp: 
                         tmp.write(uploaded_pdf.getvalue())
@@ -463,29 +466,12 @@ with tab4:
                     try:
                         with pdfplumber.open(tmp_path) as pdf:
                             total_pages = len(pdf.pages)
-                            
-                            # Menggunakan st.empty() agar tampilan tidak freeze
                             progress_bar = st.progress(0)
                             status_text = st.empty()
                             
-                           for i, page in enumerate(pdf.pages):
+                            for i, page in enumerate(pdf.pages):
                                 try:
-                                    # --- FITUR ANTI WATERMARK ---
-                                    def filter_watermark(obj):
-                                        if obj.get("object_type") == "char":
-                                            # Hapus teks miring / diagonal (biasanya watermark)
-                                            if not obj.get("upright", True):
-                                                return False
-                                            # Hapus teks raksasa (ukuran font > 30)
-                                            if obj.get("size", 0) > 30:
-                                                return False
-                                        return True
-                                    
-                                    # Terapkan filter ke halaman sebelum diekstrak
-                                    clean_page = page.filter(filter_watermark)
-                                    tables = clean_page.extract_tables() 
-                                    # -----------------------------
-                                    
+                                    tables = page.extract_tables() 
                                     for table in tables:
                                         df_std = process_standard_table(table)
                                         if df_std is not None and not df_std.empty: 
@@ -493,14 +479,12 @@ with tab4:
                                 except Exception as e:
                                     error_pages.append(f"Halaman {i+1}: {str(e)}")
                                 finally:
-                                    # Membersihkan cache pdfplumber setiap halaman agar RAM tidak jebol
                                     page.flush_cache() 
                                 
-                                # Mengurangi beban update UI Browser Streamlit
                                 if (i + 1) % 5 == 0 or (i + 1) == total_pages:
                                     progress_bar.progress((i + 1) / total_pages)
                                     status_text.text(f"Memproses halaman {i+1} dari {total_pages}...")
-                                    gc.collect() # Panggil Garbage Collector
+                                    gc.collect()
                                 
                     except Exception as e:
                         st.error(f"Gagal membuka file PDF: {str(e)}")
@@ -531,3 +515,209 @@ with tab4:
                     st.error(f"Gagal saat menggabungkan data: {str(e)}")
             else:
                 st.warning("⚠️ Tidak ada data tabel yang terdeteksi.")
+
+# ==========================================
+# TAB 5: PARSING BANYAK FILE ICONPRN KE EXCEL
+# ==========================================
+with tab5:
+    st.header("Tahap 5: Rekap Data ICONPRN")
+    st.markdown("Ekstraksi file teks `.iconprn` menjadi file Excel tagihan gabungan secara otomatis.")
+    
+    iconprn_files = st.file_uploader("Upload File .iconprn", accept_multiple_files=True, key="t5_iconprn")
+    
+    if st.button("Proses File ICONPRN", type="primary"):
+        if not iconprn_files:
+            st.error("Silakan unggah setidaknya satu file .iconprn.")
+        else:
+            with st.spinner("Mengekstrak data dari file .iconprn..."):
+                semua_hasil = []
+                
+                def tentukan_petugas(idpel, tarif_daya, kddk):
+                    daya = 0
+                    match_daya = re.search(r'/(\d+)', str(tarif_daya))
+                    if match_daya: daya = int(match_daya.group(1))
+                    if daya > 33000: return "PLN"
+                    
+                    idpel_khusus = {"524051069054": "c28", "524051263717": "c36", "524051265123": "c36", "524051104194": "c04", "524051000615": "c08", "524050867033": "c08"}
+                    if str(idpel) in idpel_khusus: return idpel_khusus[str(idpel)]
+                        
+                    if len(str(kddk)) >= 6:
+                        kode_mid = str(kddk)[3:6].upper()
+                        mapping_kddk = {
+                            "JCA": "c01", "TAA": "c02", "JCB": "c03", "JCC": "c04", "NCD": "c05",
+                            "KBA": "c06", "TAB": "c07", "JCE": "c08", "TAC": "c09", "MBB": "c10",
+                            "KAD": "c11", "TAE": "c12", "KCF": "c13", "JCG": "c14", "TAF": "c15",
+                            "KAG": "c16", "BBC": "c17", "TAH": "c18", "BCK": "c19", "NCH": "c20",
+                            "JBE": "c21", "MBF": "c22", "MBG": "c23", "KBH": "c24", "KBI": "c25",
+                            "KAI": "c26", "MCI": "c27", "KBJ": "c28", "JCJ": "c29", "TAJ": "c30",
+                            "MBK": "c31", "KBL": "c32", "TAK": "c33", "KAL": "c34", "JCL": "c35",
+                            "MBD": "c36", "KCJ": "c29", "NBJ": "c28", "TAI": "c26", "BBD": "c19",
+                            "KCG": "c29", "MBM": "c23"
+                        }
+                        return mapping_kddk.get(kode_mid, "BARU")
+                    return "BARU"
+
+                for file in iconprn_files:
+                    try:
+                        content = file.getvalue().decode('utf-8', errors='ignore')
+                        blok_pelanggan = re.split(r'PEMBERITAHUAN PELAKSANAAN PEMUTUSAN', content)
+                        
+                        for blok in blok_pelanggan:
+                            if "ID. Pelanggan" not in blok: continue
+                            
+                            data = {
+                                'IDPEL': "", 'Nomor TUL': "", 'Nama': "", 'KDDK': "", 'Gardu/Tiang': "", 
+                                'Loket': "", 'Alamat': "", 'Nomor Meter': "", 'Tarif/Daya': "", 'Kelompok': "", 
+                                'Bulan Rekening': "", 'Bulan Keterlambatan': "", 'Jumlah Rekening': 0, 
+                                'Jumlah Denda': 0, 'Jumlah Tunggakan': 0, 'petugas': ""
+                            }
+                            
+                            idpel = re.search(r'ID\. Pelanggan\s*:\s*[^0-9]*(\d{11,13})', blok)
+                            if idpel: data['IDPEL'] = str(idpel.group(1).strip())
+
+                            tul = re.search(r'NO\. TUL\s*:\s*([A-Z0-9/\-]+)', blok)
+                            if tul: data['Nomor TUL'] = tul.group(1).strip()
+
+                            nama = re.search(r'Nama\s*:\s*(.+)', blok)
+                            if nama: data['Nama'] = nama.group(1).strip()
+
+                            kddk = re.search(r'Kode Kedudukan\s*:\s*([A-Z0-9]+)', blok)
+                            if kddk: data['KDDK'] = kddk.group(1).strip()
+
+                            gardu = re.search(r'Gardu\s*/?\s*Tiang\s*:\s*(.*?)(?=\s{2,}|\s+Loket\s*:|\n|\r|$)', blok, re.IGNORECASE)
+                            if gardu: data['Gardu/Tiang'] = gardu.group(1).strip()
+
+                            loket = re.search(r'Loket\s*:\s*(.*?)(?=\s{2,}|\s+Tarip|\s+Tarif|\s+Alamat|\s+Kelompok|\n|\r|$)', blok, re.IGNORECASE)
+                            if loket: 
+                                val_loket = loket.group(1).strip()
+                                if "Tarip" in val_loket or "Kelompok" in val_loket or "Daya" in val_loket: val_loket = ""
+                                data['Loket'] = val_loket
+
+                            alamat = re.search(r'Alamat\s*:\s*(.+)', blok)
+                            if alamat: data['Alamat'] = alamat.group(1).strip()
+
+                            meter = re.search(r'Nomor Meter\s*:\s*(\d+)', blok)
+                            if meter: data['Nomor Meter'] = str(meter.group(1).strip())
+
+                            tarif_match = re.search(r'Tarip / Daya\s*:\s*(.+?)\s+Kelompok\s*:\s*([^\n]+)', blok)
+                            if tarif_match:
+                                data['Tarif/Daya'] = tarif_match.group(1).strip()
+                                data['Kelompok'] = tarif_match.group(2).strip()
+                            else:
+                                tarif = re.search(r'Tarip / Daya\s*:\s*([A-Z0-9/ ]+)', blok)
+                                if tarif: data['Tarif/Daya'] = tarif.group(1).strip()
+                                data['Kelompok'] = "1"
+
+                            rek = re.search(r'Rekening\s*:\s*(.+?)\s*Rp\.\s*:\s*[^0-9]*([\d,]+)', blok)
+                            if rek:
+                                data['Bulan Rekening'] = rek.group(1).strip()
+                                val_rek = rek.group(2).replace(',', '').replace('.', '').strip()
+                                data['Jumlah Rekening'] = int(val_rek) if val_rek.isdigit() else 0
+
+                            denda = re.search(r'Jumlah Biaya Keterlambatan s\.d bulan\s*:\s*(.+?)\s*Rp\.\s*:\s*[^0-9]*([\d,]+)', blok)
+                            if denda:
+                                data['Bulan Keterlambatan'] = denda.group(1).strip()
+                                val_denda = denda.group(2).replace(',', '').replace('.', '').strip()
+                                data['Jumlah Denda'] = int(val_denda) if val_denda.isdigit() else 0
+
+                            tunggakan = re.search(r'Jumlah Tunggakan.*?Rp\.\s*:\s*[^0-9]*([\d,]+)', blok)
+                            if tunggakan:
+                                val_tung = tunggakan.group(1).replace(',', '').replace('.', '').strip()
+                                data['Jumlah Tunggakan'] = int(val_tung) if val_tung.isdigit() else 0
+
+                            data['petugas'] = tentukan_petugas(data['IDPEL'], data['Tarif/Daya'], data['KDDK'])
+                            semua_hasil.append(data)
+
+                    except Exception as e:
+                        st.error(f"Gagal membaca file {file.name}: {str(e)}")
+
+                if semua_hasil:
+                    df_hasil = pd.DataFrame(semua_hasil)
+                    st.success(f"✅ Berhasil mengekstrak {len(df_hasil)} data tagihan!")
+                    st.dataframe(df_hasil.head(50), use_container_width=True)
+                    
+                    st.download_button(
+                        "📥 Download Rekap Tagihan ICONPRN (.xlsx)", 
+                        data=to_excel_bytes(df_hasil), 
+                        file_name="rekap_tagihan_gabungan.xlsx", 
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", 
+                        type="primary"
+                    )
+                else:
+                    st.warning("⚠️ Tidak ada data tagihan valid yang ditemukan.")
+
+# ==========================================
+# TAB 6: APLIKASI UPDATE MASTER DATA
+# ==========================================
+with tab6:
+    st.header("Tahap 6: Update Master Data Pelanggan")
+    st.markdown("Meng-update data master lama dengan data baru berdasarkan IDPEL. Data bersimbol bintang (`*`) tidak akan menimpa data master.")
+    
+    col_t6_1, col_t6_2 = st.columns(2)
+    with col_t6_1:
+        file_lama_m = st.file_uploader("Upload File Excel Data LAMA", type=['xlsx', 'xls'], key="t6_lama")
+    with col_t6_2:
+        file_baru_m = st.file_uploader("Upload File Excel Data BARU", type=['xlsx', 'xls'], key="t6_baru")
+
+    if st.button("Proses Update Master Data", type="primary"):
+        if not file_lama_m or not file_baru_m:
+            st.error("Silakan unggah kedua file Excel (Data Lama & Data Baru).")
+        else:
+            with st.spinner("Memproses sinkronisasi master data..."):
+                try:
+                    df_lama = pd.read_excel(file_lama_m, dtype=str)
+                    df_baru = pd.read_excel(file_baru_m, dtype=str)
+
+                    kolom_asli_lama = df_lama.columns.tolist()
+
+                    df_lama.columns = df_lama.columns.astype(str).str.strip().str.lower()
+                    df_baru.columns = df_baru.columns.astype(str).str.strip().str.lower()
+
+                    kolom_yang_sama = df_baru.columns.intersection(df_lama.columns)
+                    df_baru = df_baru[kolom_yang_sama]
+
+                    if 'idpel' not in df_lama.columns or 'idpel' not in df_baru.columns:
+                        st.error("❌ Kolom 'IDPEL' tidak ditemukan di salah satu file!")
+                    else:
+                        df_lama['idpel'] = df_lama['idpel'].str.replace('.0', '', regex=False).str.strip()
+                        df_baru['idpel'] = df_baru['idpel'].str.replace('.0', '', regex=False).str.strip()
+
+                        df_lama.set_index('idpel', inplace=True)
+                        df_baru.set_index('idpel', inplace=True)
+
+                        mask_exist = df_baru.index.isin(df_lama.index)
+                        df_baru_exist = df_baru[mask_exist].copy()
+                        df_baru_new = df_baru[~mask_exist].copy()
+
+                        if not df_baru_exist.empty:
+                            def bersihkan_sel(val):
+                                if pd.isna(val): return np.nan
+                                s = str(val).strip()
+                                if '*' in s or s.lower() == 'nan' or s == '':
+                                    return np.nan
+                                return val
+
+                            df_update_clean = df_baru_exist.apply(lambda col: col.map(bersihkan_sel))
+                            df_lama.update(df_update_clean)
+
+                        if not df_baru_new.empty:
+                            df_lama = pd.concat([df_lama, df_baru_new])
+
+                        df_lama.reset_index(inplace=True)
+
+                        mapping_kolom = dict(zip([c.lower() for c in kolom_asli_lama], kolom_asli_lama))
+                        df_lama.rename(columns=mapping_kolom, inplace=True)
+
+                        st.success(f"✅ Berhasil memperbarui data! Total data sekarang: {len(df_lama)} baris.")
+                        st.dataframe(df_lama.head(50), use_container_width=True)
+
+                        st.download_button(
+                            "📥 Download Master Data Updated (.xlsx)", 
+                            data=to_excel_bytes(df_lama), 
+                            file_name="Master_Data_Updated.xlsx", 
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", 
+                            type="primary"
+                        )
+
+                except Exception as e:
+                    st.error(f"❌ Terjadi kesalahan: {str(e)}")
