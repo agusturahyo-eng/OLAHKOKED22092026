@@ -729,89 +729,86 @@ with tab6:
 with tab7:
     st.header("Tahap 7: Info Data & Lokasi Pelanggan")
     
-    # 1. LINK DISEMBUNYIKAN DI DALAM KODE (Tidak perlu diinput manual lagi)
+    # Link tersimpan otomatis di latar belakang
     sheet_url = "https://docs.google.com/spreadsheets/d/1Po-6B5KvYY0uGBnqeVSocifwe6FBnDvecpf2a_JzvN0/edit?usp=sharing"
     
     @st.cache_data(ttl=600)
     def load_data_gsheet(url):
-        # Mengubah link otomatis menjadi format CSV agar bisa dibaca Pandas
         csv_url = re.sub(r'/edit.*', '/export?format=csv', url)
+        # Membaca semua data sebagai tipe String murni
         return pd.read_csv(csv_url, dtype=str)
 
     try:
-        # Data langsung dimuat otomatis di latar belakang
         with st.spinner("Menghubungkan ke Database..."):
             df_sheet = load_data_gsheet(sheet_url)
             
-        # 2. ANTARMUKA PENCARIAN YANG BERSIH UNTUK HP
-        with st.form(key="search_form_android_v2"):
-            # Pilihan kategori dibuat baku agar cepat
+        with st.form(key="search_form_android_v3"):
             kategori = st.selectbox("🎯 Pilih Dasar Pencarian:", ["IDPEL", "NAMA", "NOMOR METER", "SEMUA KOLOM"])
-            
-            # Kotak input kata kunci
             search_query = st.text_input(f"🔍 Masukkan {kategori}:")
-            
-            # Tombol pencarian besar untuk ditekan di layar HP
             submit_button = st.form_submit_button("🔍 Cari Data Sekarang", type="primary", use_container_width=True)
         
-        # 3. PROSES PENCARIAN
         if submit_button and search_query:
-            # Menentukan kolom mana yang akan dicari berdasarkan pilihan dropdown
-            if kategori == "SEMUA KOLOM":
-                # Cari di semua sel
-                mask = df_sheet.astype(str).agg(' '.join, axis=1).str.contains(search_query, case=False, na=False)
-                hasil = df_sheet[mask]
-            else:
-                # Cari kolom yang mirip dengan kategori pilihan
-                if kategori == "IDPEL":
-                    kolom_target = [c for c in df_sheet.columns if 'ID' in str(c).upper()]
-                elif kategori == "NAMA":
-                    kolom_target = [c for c in df_sheet.columns if 'NAMA' in str(c).upper()]
-                elif kategori == "NOMOR METER":
-                    kolom_target = [c for c in df_sheet.columns if 'METER' in str(c).upper() or 'NO' in str(c).upper()]
-                
-                # Jika kolom ditemukan, cari hanya di kolom tersebut (lebih cepat & akurat)
-                if kolom_target:
-                    mask = df_sheet[kolom_target].astype(str).agg(' '.join, axis=1).str.contains(search_query, case=False, na=False)
-                    hasil = df_sheet[mask]
-                else:
-                    hasil = pd.DataFrame() # Jika anehnya kolom tidak ada
+            query_clean = str(search_query).strip().lower()
             
-            # 4. MENAMPILKAN HASIL
+            # 1. Menentukan Kolom Target Berdasarkan Pilihan
+            if kategori == "IDPEL":
+                target_cols = [c for c in df_sheet.columns if any(k in str(c).upper() for k in ['IDPEL', 'ID PEL', 'ID'])]
+            elif kategori == "NAMA":
+                target_cols = [c for c in df_sheet.columns if 'NAMA' in str(c).upper()]
+            elif kategori == "NOMOR METER":
+                target_cols = [c for c in df_sheet.columns if any(k in str(c).upper() for k in ['METER', 'NO'])]
+            else:
+                target_cols = list(df_sheet.columns)
+            
+            # Jika nama kolom spesifik tidak ditemukan, gunakan semua kolom
+            if not target_cols:
+                target_cols = list(df_sheet.columns)
+
+            # 2. Filtering Aman (Anti-Error Float & Anti-Crash)
+            masks = []
+            for col in target_cols:
+                mask_col = df_sheet[col].fillna('').astype(str).str.lower().str.contains(query_clean, na=False, regex=False)
+                masks.append(mask_col)
+            
+            # Gabungkan hasil pencarian antar kolom dengan logika OR (|)
+            final_mask = pd.concat(masks, axis=1).any(axis=1)
+            hasil = df_sheet[final_mask]
+            
+            # 3. Menampilkan Hasil
             if not hasil.empty:
                 st.write(f"**Ditemukan {len(hasil)} data:**")
                 
                 for idx, row in hasil.iterrows():
-                    # Mencari nama dan IDPEL untuk judul baris
+                    # Menentukan judul header kotak
                     id_col = next((c for c in df_sheet.columns if 'ID' in str(c).upper()), df_sheet.columns[0])
                     nama_col = next((c for c in df_sheet.columns if 'NAMA' in str(c).upper()), None)
                     
-                    title_str = f"👤 {row[id_col]}"
+                    val_id = str(row[id_col]) if pd.notna(row[id_col]) else "Detail"
+                    title_str = f"👤 {val_id}"
+                    
                     if nama_col and pd.notna(row[nama_col]):
                         title_str += f" - {row[nama_col]}"
                         
                     with st.expander(title_str):
-                        # Tampilkan semua info text
                         for col in df_sheet.columns:
                             st.write(f"**{col}:** {row[col]}")
                         
-                        # Deteksi otomatis angka Latitude dan Longitude
+                        # Deteksi Angka Koordinat (Latitude & Longitude)
                         lat_val, lon_val = None, None
                         
                         for col in df_sheet.columns:
                             val_str = str(row[col]).strip().replace(',', '.')
                             try:
                                 num_val = float(val_str)
-                                # Filter Latitude Indonesia (-11 s/d 6)
+                                # Latitude Indonesia (-11 s/d 6)
                                 if -11.0 <= num_val <= 6.0 and lat_val is None:
                                     lat_val = str(num_val)
-                                # Filter Longitude Indonesia (95 s/d 141)
+                                # Longitude Indonesia (95 s/d 141)
                                 elif 95.0 <= num_val <= 141.0 and lon_val is None:
                                     lon_val = str(num_val)
                             except ValueError:
                                 pass
                         
-                        # Tombol Maps
                         st.markdown("---")
                         if lat_val and lon_val:
                             maps_url = f"https://www.google.com/maps/search/?api=1&query={lat_val},{lon_val}"
@@ -819,7 +816,7 @@ with tab7:
                         else:
                             st.warning("⚠️ Data koordinat lokasi tidak ditemukan atau formatnya bukan angka.")
             else:
-                st.error("❌ Data tidak ditemukan. Coba cek kembali kata kunci atau kategorinya.")
+                st.error("❌ Data tidak ditemukan. Coba periksa kembali kata kunci atau kategorinya.")
                 
     except Exception as e:
         st.error(f"Gagal memuat database. Error: {str(e)}")
