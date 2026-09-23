@@ -304,13 +304,14 @@ def to_excel_bytes(df):
 # ==========================================
 st.title("⚡ Aplikasi Olah Data & Ekstrak PDF / ICONPRN")
 
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-    "1️⃣ Tahap 1: Persiapan Data", 
-    "2️⃣ Tahap 2: Mutasi KOKED",
+tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+    "1️⃣ Tahap 1: Persiapan", 
+    "2️⃣ Tahap 2: Mutasi",
     "3️⃣ Tahap 3: PDF (Tipe 1)",
     "4️⃣ Tahap 4: PDF (Tipe 2)",
-    "5️⃣ Tahap 5: Rekap Data ICONPRN",
-    "6️⃣ Tahap 6: Update Master Data"
+    "5️⃣ Tahap 5: ICONPRN",
+    "6️⃣ Tahap 6: Update Master",
+    "7️⃣ Tahap 7: Info & Lokasi"
 ])
 
 # ==========================================
@@ -721,3 +722,67 @@ with tab6:
 
                 except Exception as e:
                     st.error(f"❌ Terjadi kesalahan: {str(e)}")
+                    
+# ==========================================
+# TAB 7: INFO DATA & LOKASI (GOOGLE SHEETS)
+# ==========================================
+with tab7:
+    st.header("Tahap 7: Info Data & Lokasi Pelanggan")
+    st.markdown("Cari data pelanggan dari Google Sheets dan buka lokasi langsung ke Google Maps.")
+    st.info("💡 **PENTING:** Pastikan link Google Sheet Anda sudah diset ke **'Anyone with the link'** (Siapa saja yang memiliki link dapat melihat).")
+    
+    sheet_url = st.text_input("🔗 Masukkan Link Google Sheet:", placeholder="https://docs.google.com/spreadsheets/d/..../edit")
+    
+    if sheet_url:
+        # Mengubah link Google Sheet menjadi link download CSV agar bisa dibaca Pandas
+        csv_url = re.sub(r'/edit.*', '/export?format=csv', sheet_url)
+        
+        try:
+            with st.spinner("Memuat data dari Google Sheets..."):
+                # Membaca data tanpa login
+                df_sheet = pd.read_csv(csv_url, dtype=str)
+                
+            st.success("✅ Data berhasil terhubung!")
+            
+            # Kolom Pencarian
+            search_query = st.text_input("🔍 Cari berdasarkan IDPEL / Nama / Nomor Meter:")
+            
+            if search_query:
+                # Filter data berdasarkan input (case-insensitive) di semua kolom
+                mask = df_sheet.apply(lambda baris: baris.astype(str).str.contains(search_query, case=False, na=False).any(), axis=1)
+                hasil = df_sheet[mask]
+                
+                if not hasil.empty:
+                    st.write(f"**Ditemukan {len(hasil)} data:**")
+                    
+                    for idx, row in hasil.iterrows():
+                        # Mengambil IDPEL dan Nama untuk judul box
+                        judul_id = row.get('IDPEL', row.get('ID PELANGGAN', 'Unknown ID'))
+                        judul_nama = row.get('NAMA', row.get('NAMA PELANGGAN', 'Unknown Nama'))
+                        
+                        with st.expander(f"👤 {judul_id} - {judul_nama}"):
+                            # Menampilkan semua informasi kolom
+                            for col in df_sheet.columns:
+                                st.write(f"**{col}:** {row[col]}")
+                            
+                            # Deteksi otomatis kolom koordinat (Latitude & Longitude)
+                            lat_col = next((c for c in df_sheet.columns if c.upper() in ['LATITUDE', 'LAT', 'LATITUD']), None)
+                            lon_col = next((c for c in df_sheet.columns if c.upper() in ['LONGITUDE', 'LONG', 'LON', 'LNG']), None)
+                            
+                            if lat_col and lon_col:
+                                lat = str(row[lat_col]).strip()
+                                lon = str(row[lon_col]).strip()
+                                
+                                # Pastikan data koordinat bukan kosong atau NaN
+                                if lat.replace('.', '', 1).replace('-', '', 1).isdigit() and lon.replace('.', '', 1).replace('-', '', 1).isdigit():
+                                    maps_url = f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
+                                    st.link_button("📍 Buka Lokasi di Google Maps", maps_url, type="primary")
+                                else:
+                                    st.warning("⚠️ Data koordinat untuk pelanggan ini kosong atau formatnya salah.")
+                            else:
+                                st.warning("⚠️ Tidak menemukan kolom 'Latitude' dan 'Longitude' di Google Sheet Anda.")
+                else:
+                    st.warning("❌ Data tidak ditemukan.")
+                    
+        except Exception as e:
+            st.error(f"Gagal memuat Google Sheet. Pastikan link benar dan aksesnya sudah Public (Anyone with the link). Error: {str(e)}")
