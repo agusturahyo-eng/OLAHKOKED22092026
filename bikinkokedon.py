@@ -859,6 +859,12 @@ with tab8:
                     if 'idpel' not in df_lama.columns or 'idpel' not in df_baru.columns:
                         st.error("❌ Error: Pastikan kedua file memiliki kolom bernama 'IDPEL' (atau 'idpel').")
                     else:
+                        # --- PERBAIKAN ERROR: MENGHAPUS DUPLIKAT IDPEL ---
+                        # Menghapus duplikat IDPEL agar index tidak ganda.
+                        # keep='last' berarti jika ada idpel ganda, data paling bawah (terbaru) yang akan dipertahankan
+                        df_lama.drop_duplicates(subset=['idpel'], keep='last', inplace=True)
+                        df_baru.drop_duplicates(subset=['idpel'], keep='last', inplace=True)
+
                         # 2. LOGIKA UPDATE DATA
                         df_lama.set_index('idpel', inplace=True)
                         df_baru.set_index('idpel', inplace=True)
