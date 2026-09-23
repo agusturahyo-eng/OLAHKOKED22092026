@@ -468,9 +468,24 @@ with tab4:
                             progress_bar = st.progress(0)
                             status_text = st.empty()
                             
-                            for i, page in enumerate(pdf.pages):
+                           for i, page in enumerate(pdf.pages):
                                 try:
-                                    tables = page.extract_tables() 
+                                    # --- FITUR ANTI WATERMARK ---
+                                    def filter_watermark(obj):
+                                        if obj.get("object_type") == "char":
+                                            # Hapus teks miring / diagonal (biasanya watermark)
+                                            if not obj.get("upright", True):
+                                                return False
+                                            # Hapus teks raksasa (ukuran font > 30)
+                                            if obj.get("size", 0) > 30:
+                                                return False
+                                        return True
+                                    
+                                    # Terapkan filter ke halaman sebelum diekstrak
+                                    clean_page = page.filter(filter_watermark)
+                                    tables = clean_page.extract_tables() 
+                                    # -----------------------------
+                                    
                                     for table in tables:
                                         df_std = process_standard_table(table)
                                         if df_std is not None and not df_std.empty: 
