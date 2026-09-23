@@ -729,71 +729,97 @@ with tab6:
 with tab7:
     st.header("Tahap 7: Info Data & Lokasi Pelanggan")
     
-    # 1. PAUTAN GOOGLE SHEET (Simpan secara automatik)
-    default_url = "https://docs.google.com/spreadsheets/d/1Po-6B5KvYY0uGBnqeVSocifwe6FBnDvecpf2a_JzvN0/edit?usp=sharing"
-    sheet_url = st.text_input("🔗 Link Google Sheet:", value=default_url)
+    # 1. LINK DISEMBUNYIKAN DI DALAM KODE (Tidak perlu diinput manual lagi)
+    sheet_url = "https://docs.google.com/spreadsheets/d/1Po-6B5KvYY0uGBnqeVSocifwe6FBnDvecpf2a_JzvN0/edit?usp=sharing"
     
     @st.cache_data(ttl=600)
     def load_data_gsheet(url):
+        # Mengubah link otomatis menjadi format CSV agar bisa dibaca Pandas
         csv_url = re.sub(r'/edit.*', '/export?format=csv', url)
         return pd.read_csv(csv_url, dtype=str)
 
-    if sheet_url:
-        try:
-            with st.spinner("Memuatkan data dari Google Sheets..."):
-                df_sheet = load_data_gsheet(sheet_url)
+    try:
+        # Data langsung dimuat otomatis di latar belakang
+        with st.spinner("Menghubungkan ke Database..."):
+            df_sheet = load_data_gsheet(sheet_url)
+            
+        # 2. ANTARMUKA PENCARIAN YANG BERSIH UNTUK HP
+        with st.form(key="search_form_android_v2"):
+            # Pilihan kategori dibuat baku agar cepat
+            kategori = st.selectbox("🎯 Pilih Dasar Pencarian:", ["IDPEL", "NAMA", "NOMOR METER", "SEMUA KOLOM"])
+            
+            # Kotak input kata kunci
+            search_query = st.text_input(f"🔍 Masukkan {kategori}:")
+            
+            # Tombol pencarian besar untuk ditekan di layar HP
+            submit_button = st.form_submit_button("🔍 Cari Data Sekarang", type="primary", use_container_width=True)
+        
+        # 3. PROSES PENCARIAN
+        if submit_button and search_query:
+            # Menentukan kolom mana yang akan dicari berdasarkan pilihan dropdown
+            if kategori == "SEMUA KOLOM":
+                # Cari di semua sel
+                mask = df_sheet.astype(str).agg(' '.join, axis=1).str.contains(search_query, case=False, na=False)
+                hasil = df_sheet[mask]
+            else:
+                # Cari kolom yang mirip dengan kategori pilihan
+                if kategori == "IDPEL":
+                    kolom_target = [c for c in df_sheet.columns if 'ID' in str(c).upper()]
+                elif kategori == "NAMA":
+                    kolom_target = [c for c in df_sheet.columns if 'NAMA' in str(c).upper()]
+                elif kategori == "NOMOR METER":
+                    kolom_target = [c for c in df_sheet.columns if 'METER' in str(c).upper() or 'NO' in str(c).upper()]
                 
-            st.success("✅ Data berhasil terhubung!")
-            
-            # 2. DROPDOWN PILIHAN KOLOM CARIAN (Supaya carian pantas)
-            pilihan_kolom = ["Semua Kolom"] + list(df_sheet.columns)
-            kolom_dipilih = st.selectbox("🎯 Cari berdasarkan kolom apa?", pilihan_kolom)
-            
-            search_query = st.text_input(f"🔍 Masukkan kata kunci ({kolom_dipilih}):")
-            
-            if search_query:
-                # Proses carian fokus pada kolom pilihan
-                if kolom_dipilih == "Semua Kolom":
-                    gabungan_teks = df_sheet.astype(str).agg(' '.join, axis=1)
-                    hasil = df_sheet[gabungan_teks.str.contains(search_query, case=False, na=False)]
+                # Jika kolom ditemukan, cari hanya di kolom tersebut (lebih cepat & akurat)
+                if kolom_target:
+                    mask = df_sheet[kolom_target].astype(str).agg(' '.join, axis=1).str.contains(search_query, case=False, na=False)
+                    hasil = df_sheet[mask]
                 else:
-                    hasil = df_sheet[df_sheet[kolom_dipilih].astype(str).str.contains(search_query, case=False, na=False)]
+                    hasil = pd.DataFrame() # Jika anehnya kolom tidak ada
+            
+            # 4. MENAMPILKAN HASIL
+            if not hasil.empty:
+                st.write(f"**Ditemukan {len(hasil)} data:**")
                 
-                if not hasil.empty:
-                    st.write(f"**Ditemukan {len(hasil)} data:**")
+                for idx, row in hasil.iterrows():
+                    # Mencari nama dan IDPEL untuk judul baris
+                    id_col = next((c for c in df_sheet.columns if 'ID' in str(c).upper()), df_sheet.columns[0])
+                    nama_col = next((c for c in df_sheet.columns if 'NAMA' in str(c).upper()), None)
                     
-                    for idx, row in hasil.iterrows():
-                        # Dapatkan ID dan Nama untuk tajuk box
-                        id_val = row.get('IDPEL', row.get('ID PELANGGAN', 'Detail'))
-                        nama_val = row.get('NAMA', row.get('NAMA PELANGGAN', ''))
+                    title_str = f"👤 {row[id_col]}"
+                    if nama_col and pd.notna(row[nama_col]):
+                        title_str += f" - {row[nama_col]}"
                         
-                        with st.expander(f"👤 {row[id_val] if id_val in row else 'Pelanggan'} - {row[nama_val] if nama_val in row else ''}"):
-                            for col in df_sheet.columns:
-                                st.write(f"**{col}:** {row[col]}")
-                            
-                            # 3. PENGESANAN PINTAR KOORDINAT X & Y / LAT LONG
-                            lat_val, lon_val = None, None
-                            
-                            for col in df_sheet.columns:
-                                val_str = str(row[col]).strip().replace(',', '.')
-                                try:
-                                    num_val = float(val_str)
-                                    # Latitude Indonesia berada di julat -11 hingga 6 (cth: -7.604...)
-                                    if -11.0 <= num_val <= 6.0 and lat_val is None:
-                                        lat_val = str(num_val)
-                                    # Longitude Indonesia berada di julat 95 hingga 141 (cth: 110.603...)
-                                    elif 95.0 <= num_val <= 141.0 and lon_val is None:
-                                        lon_val = str(num_val)
-                                except ValueError:
-                                    pass
-                            
-                            if lat_val and lon_val:
-                                maps_url = f"https://www.google.com/maps/search/?api=1&query={lat_val},{lon_val}"
-                                st.link_button("📍 Buka Lokasi di Google Maps", maps_url, type="primary")
-                            else:
-                                st.warning("⚠️ Data koordinat lokasi tidak sedia atau formatnya salah.")
-                else:
-                    st.warning("❌ Data tidak ditemukan.")
-                    
-        except Exception as e:
-            st.error(f"Gagal memuatkan Google Sheet. Ralat: {str(e)}")
+                    with st.expander(title_str):
+                        # Tampilkan semua info text
+                        for col in df_sheet.columns:
+                            st.write(f"**{col}:** {row[col]}")
+                        
+                        # Deteksi otomatis angka Latitude dan Longitude
+                        lat_val, lon_val = None, None
+                        
+                        for col in df_sheet.columns:
+                            val_str = str(row[col]).strip().replace(',', '.')
+                            try:
+                                num_val = float(val_str)
+                                # Filter Latitude Indonesia (-11 s/d 6)
+                                if -11.0 <= num_val <= 6.0 and lat_val is None:
+                                    lat_val = str(num_val)
+                                # Filter Longitude Indonesia (95 s/d 141)
+                                elif 95.0 <= num_val <= 141.0 and lon_val is None:
+                                    lon_val = str(num_val)
+                            except ValueError:
+                                pass
+                        
+                        # Tombol Maps
+                        st.markdown("---")
+                        if lat_val and lon_val:
+                            maps_url = f"https://www.google.com/maps/search/?api=1&query={lat_val},{lon_val}"
+                            st.link_button("📍 Buka Lokasi di Google Maps", maps_url, type="primary", use_container_width=True)
+                        else:
+                            st.warning("⚠️ Data koordinat lokasi tidak ditemukan atau formatnya bukan angka.")
+            else:
+                st.error("❌ Data tidak ditemukan. Coba cek kembali kata kunci atau kategorinya.")
+                
+    except Exception as e:
+        st.error(f"Gagal memuat database. Error: {str(e)}")
