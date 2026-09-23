@@ -729,68 +729,75 @@ with tab6:
 with tab7:
     st.header("Tahap 7: Info Data & Lokasi Pelanggan")
     
-    sheet_url = "https://docs.google.com/spreadsheets/d/1Po-6B5KvYY0uGBnqeVSocifwe6FBnDvecpf2a_JzvN0/edit?usp=sharing"
+    url_g_sheet = "https://docs.google.com/spreadsheets/d/1Po-6B5KvYY0uGBnqeVSocifwe6FBnDvecpf2a_JzvN0/edit?usp=sharing"
     
-    # NAMA FUNGSI DIUBAH UNTUK MEMAKSA STREAMLIT MERESET CACHE LAMA
-    @st.cache_data(ttl=300)
-    def tarik_data_gsheet_terbaru(url):
-        csv_url = re.sub(r'/edit.*', '/export?format=csv', url)
-        df = pd.read_csv(csv_url, dtype=str)
-        # Paksa seluruh data diubah menjadi teks (string) murni sejak ditarik
-        return df.fillna('').astype(str)
+    @st.cache_data(ttl=120)
+    def ambil_data_sheet_aman(link_url):
+        url_csv = re.sub(r'/edit.*', '/export?format=csv', link_url)
+        # Ambil data dan paksa judul kolom menjadi string
+        data_tabel = pd.read_csv(url_csv, dtype=str)
+        data_tabel.columns = data_tabel.columns.astype(str)
+        return data_tabel.fillna('')
 
     try:
-        with st.spinner("Menghubungkan ke Database..."):
-            df_sheet = tarik_data_gsheet_terbaru(sheet_url)
+        with st.spinner("Menyiapkan Data..."):
+            tabel_utama = ambil_data_sheet_aman(url_g_sheet)
             
-        # ID FORM DIUBAH AGAR TAMPILAN FRESH
-        with st.form(key="form_pencarian_final"):
-            kategori = st.selectbox("🎯 Pilih Dasar Pencarian:", ["IDPEL", "NAMA", "NOMOR METER", "SEMUA KOLOM"])
-            search_query = st.text_input("🔍 Masukkan Kata Kunci Pencarian:")
-            submit_button = st.form_submit_button("🔍 Cari Data Sekarang", type="primary", use_container_width=True)
+        with st.form(key="form_anti_error_v5"):
+            opsi_kategori = st.selectbox("🎯 Pilih Dasar Pencarian:", ["IDPEL", "NAMA", "NOMOR METER", "SEMUA KOLOM"])
+            kata_kunci = st.text_input("🔍 Masukkan Kata Kunci:")
+            tombol_cari = st.form_submit_button("🔍 Cari Data Sekarang", type="primary", use_container_width=True)
         
-        if submit_button and search_query:
-            query_clean = str(search_query).strip().lower()
+        if tombol_cari and kata_kunci:
+            kunci_bersih = str(kata_kunci).strip().lower()
             
-            # Filter kolom target
-            if kategori == "IDPEL":
-                target_cols = [c for c in df_sheet.columns if "ID" in str(c).upper()]
-            elif kategori == "NAMA":
-                target_cols = [c for c in df_sheet.columns if "NAMA" in str(c).upper()]
-            elif kategori == "NOMOR METER":
-                target_cols = [c for c in df_sheet.columns if "METER" in str(c).upper() or "NO" in str(c).upper()]
+            # Menentukan kolom mana saja yang akan diperiksa
+            if opsi_kategori == "IDPEL":
+                kolom_pencarian = [k for k in tabel_utama.columns if "ID" in k.upper()]
+            elif opsi_kategori == "NAMA":
+                kolom_pencarian = [k for k in tabel_utama.columns if "NAMA" in k.upper()]
+            elif opsi_kategori == "NOMOR METER":
+                kolom_pencarian = [k for k in tabel_utama.columns if "METER" in k.upper() or "NO" in k.upper()]
             else:
-                target_cols = list(df_sheet.columns)
+                kolom_pencarian = list(tabel_utama.columns)
             
-            if not target_cols:
-                target_cols = list(df_sheet.columns)
+            if not kolom_pencarian:
+                kolom_pencarian = list(tabel_utama.columns)
             
-            # Pencarian 100% aman (tanpa fungsi join yang menyebabkan error float)
-            mask = pd.Series(False, index=df_sheet.index)
-            for col in target_cols:
-                # Pastikan data diubah ke string saat dicocokkan
-                kolom_teks = df_sheet[col].astype(str).str.lower()
-                mask = mask | kolom_teks.str.contains(query_clean, na=False, regex=False)
-            
-            hasil = df_sheet[mask]
-            
-            if not hasil.empty:
-                st.write(f"**Ditemukan {len(hasil)} data:**")
+            # PENCARIAN MANUAL (100% Bebas Error Float)
+            baris_cocok = []
+            for index, baris in tabel_utama.iterrows():
+                cocok = False
+                for k in kolom_pencarian:
+                    isi_sel = str(baris[k]).lower()
+                    if kunci_bersih in isi_sel:
+                        cocok = True
+                        break # Jika ketemu di satu kolom, langsung simpan datanya
                 
-                for idx, row in hasil.iterrows():
-                    id_col = next((c for c in df_sheet.columns if 'ID' in str(c).upper()), df_sheet.columns[0])
-                    nama_col = next((c for c in df_sheet.columns if 'NAMA' in str(c).upper()), None)
+                if cocok:
+                    baris_cocok.append(baris)
+            
+            tabel_hasil = pd.DataFrame(baris_cocok)
+            
+            # Menampilkan hasil pencarian
+            if not tabel_hasil.empty:
+                st.success(f"**Ditemukan {len(tabel_hasil)} data:**")
+                
+                for idx, row in tabel_hasil.iterrows():
+                    kolom_id = next((c for c in tabel_utama.columns if 'ID' in c.upper()), tabel_utama.columns[0])
+                    kolom_nama = next((c for c in tabel_utama.columns if 'NAMA' in c.upper()), None)
                     
-                    id_val = str(row[id_col]) if str(row[id_col]) != '' else "Detail"
-                    nama_val = f" - {row[nama_col]}" if nama_col and str(row[nama_col]) != '' else ""
-                    
-                    with st.expander(f"👤 {id_val}{nama_val}"):
-                        for col in df_sheet.columns:
+                    teks_judul = f"👤 {row[kolom_id]}"
+                    if kolom_nama and str(row[kolom_nama]).strip() != '':
+                        teks_judul += f" - {row[kolom_nama]}"
+                        
+                    with st.expander(teks_judul):
+                        for col in tabel_utama.columns:
                             st.write(f"**{col}:** {row[col]}")
                         
-                        # Deteksi Angka Koordinat
+                        # Deteksi Koordinat Peta
                         lat_val, lon_val = None, None
-                        for col in df_sheet.columns:
+                        for col in tabel_utama.columns:
                             val_str = str(row[col]).strip().replace(',', '.')
                             try:
                                 num_val = float(val_str)
@@ -803,12 +810,12 @@ with tab7:
                         
                         st.markdown("---")
                         if lat_val and lon_val:
-                            maps_url = f"https://www.google.com/maps/search/?api=1&query={lat_val},{lon_val}"
-                            st.link_button("📍 Buka Lokasi di Google Maps", maps_url, type="primary", use_container_width=True)
+                            url_map = f"https://www.google.com/maps/search/?api=1&query={lat_val},{lon_val}"
+                            st.link_button("📍 Buka Lokasi di Google Maps", url_map, type="primary", use_container_width=True)
                         else:
                             st.warning("⚠️ Data koordinat lokasi tidak ditemukan atau formatnya bukan angka.")
             else:
-                st.error("❌ Data tidak ditemukan. Coba periksa kembali kata kunci atau kategorinya.")
+                st.error("❌ Data tidak ditemukan. Cek kembali kata kuncinya.")
                 
     except Exception as e:
         st.error(f"Gagal memuat database. Error: {str(e)}")
