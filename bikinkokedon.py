@@ -747,10 +747,10 @@ with tab7:
             # Kolom Pencarian
             search_query = st.text_input("🔍 Cari berdasarkan IDPEL / Nama / Nomor Meter:")
             
-            if search_query:
-                # Filter data berdasarkan input (case-insensitive) di semua kolom
-                mask = df_sheet.apply(lambda baris: baris.astype(str).str.contains(search_query, case=False, na=False).any(), axis=1)
-                hasil = df_sheet[mask]
+           if search_query:
+                # Filter data metode cepat (Vectorized)
+                gabungan_teks = df_sheet.astype(str).agg(' '.join, axis=1)
+                hasil = df_sheet[gabungan_teks.str.contains(search_query, case=False, na=False)]
                 
                 if not hasil.empty:
                     st.write(f"**Ditemukan {len(hasil)} data:**")
