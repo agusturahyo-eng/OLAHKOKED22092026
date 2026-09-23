@@ -847,9 +847,9 @@ with tab8:
         else:
             with st.spinner("Sedang memproses data..."):
                 try:
-                    # 1. Membaca file Excel
-                    df_lama = pd.read_excel(file_lama)
-                    df_baru = pd.read_excel(file_baru)
+                    # 1. Membaca file Excel dan memaksa semua kolom dibaca sebagai Teks (String)
+                    df_lama = pd.read_excel(file_lama, dtype=str)
+                    df_baru = pd.read_excel(file_baru, dtype=str)
 
                     # Standardisasi nama kolom menjadi huruf kecil semua agar tidak error jika ada perbedaan kapital
                     df_lama.columns = df_lama.columns.str.lower()
