@@ -304,14 +304,15 @@ def to_excel_bytes(df):
 # ==========================================
 st.title("⚡ Aplikasi Olah Data & Ekstrak PDF / ICONPRN")
 
-tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
     "1️⃣ 1: Bikin Data Untuk Koked", 
     "2️⃣ 2: Hasil Koked",
     "3️⃣ 3: Eksport Pdf PB",
     "4️⃣ 4: Eksport PDF",
     "5️⃣ 5: eksport ICONPRN",
     "6️⃣ 6: Olah Data",
-    "7️⃣ 7: Info & Lokasi"
+    "7️⃣ 7: Info & Lokasi",
+    "8️⃣ 8: Update Data (Versi 2)"
 ])
 
 # ==========================================
@@ -821,3 +822,72 @@ with tab7:
                 
     except Exception as e:
         st.error(f"Gagal memuat database. Error: {str(e)}")
+
+# ==========================================
+# TAB 8: UPDATE MASTER DATA (VERSI 2)
+# ==========================================
+with tab8:
+    st.header("Tahap 8: Update Master Data Pelanggan (Versi 2)")
+    st.write("Meng-update data master lama dengan data baru berdasarkan IDPEL. Data bersimbol bintang ( * ) tidak akan menimpa data master.")
+    st.markdown("---")
+
+    # --- KOLOM UPLOAD FILE ---
+    col1, col2 = st.columns(2)
+
+    with col1:
+        file_lama = st.file_uploader("Upload File Excel Data LAMA", type=['xlsx', 'xls'], key="t8_lama")
+
+    with col2:
+        file_baru = st.file_uploader("Upload File Excel Data BARU", type=['xlsx', 'xls'], key="t8_baru")
+
+    # --- TOMBOL PROSES ---
+    if st.button("Proses Update Master Data (Tab 8)", type="primary"):
+        if file_lama is None or file_baru is None:
+            st.warning("⚠️ Harap upload kedua file (Data LAMA dan Data BARU) terlebih dahulu!")
+        else:
+            with st.spinner("Sedang memproses data..."):
+                try:
+                    # 1. Membaca file Excel
+                    df_lama = pd.read_excel(file_lama)
+                    df_baru = pd.read_excel(file_baru)
+
+                    # Standardisasi nama kolom menjadi huruf kecil semua agar tidak error jika ada perbedaan kapital
+                    df_lama.columns = df_lama.columns.str.lower()
+                    df_baru.columns = df_baru.columns.str.lower()
+
+                    # Cek apakah kolom 'idpel' ada di kedua file
+                    if 'idpel' not in df_lama.columns or 'idpel' not in df_baru.columns:
+                        st.error("❌ Error: Pastikan kedua file memiliki kolom bernama 'IDPEL' (atau 'idpel').")
+                    else:
+                        # 2. LOGIKA UPDATE DATA
+                        df_lama.set_index('idpel', inplace=True)
+                        df_baru.set_index('idpel', inplace=True)
+
+                        # Fungsi update(): akan memperbarui nilai di df_lama dengan nilai dari df_baru yang idpel-nya cocok
+                        df_lama.update(df_baru)
+                        
+                        # Kembalikan idpel menjadi kolom biasa
+                        df_hasil = df_lama.reset_index()
+
+                        # 3. MENAMPILKAN HASIL
+                        st.success("✅ Master Data berhasil diupdate!")
+                        st.write("Preview Hasil Update:")
+                        st.dataframe(df_hasil.head(10), use_container_width=True)
+
+                        # 4. MEMBUAT FILE EXCEL UNTUK DIDOWNLOAD
+                        output = io.BytesIO()
+                        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                            df_hasil.to_excel(writer, index=False, sheet_name='Master_Data_Update')
+                        hasil_excel = output.getvalue()
+
+                        # Tombol Download
+                        st.download_button(
+                            label="⬇️ Download Hasil Update Excel",
+                            data=hasil_excel,
+                            file_name="Master_Data_Updated_v2.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            key="t8_download"
+                        )
+
+                except Exception as e:
+                    st.error(f"❌ Terjadi kesalahan saat memproses data: {e}")
