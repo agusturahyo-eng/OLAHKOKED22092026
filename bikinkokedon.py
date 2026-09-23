@@ -305,12 +305,12 @@ def to_excel_bytes(df):
 st.title("⚡ Aplikasi Olah Data & Ekstrak PDF / ICONPRN")
 
 tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
-    "1️⃣ Tahap 1: Persiapan", 
-    "2️⃣ Tahap 2: Mutasi",
-    "3️⃣ Tahap 3: PDF (Tipe 1)",
-    "4️⃣ Tahap 4: PDF (Tipe 2)",
-    "5️⃣ Tahap 5: ICONPRN",
-    "6️⃣ Tahap 6: Update Master",
+    "1️⃣ Tahap 1: Bikin Data", 
+    "2️⃣ Tahap 2: Hasil Koked",
+    "3️⃣ Tahap 3: Eksport Pdf PB",
+    "4️⃣ Tahap 4: Eksport PDF",
+    "5️⃣ Tahap 5: eksport ICONPRN",
+    "6️⃣ Tahap 6: Olah Data",
     "7️⃣ Tahap 7: Info & Lokasi"
 ])
 
