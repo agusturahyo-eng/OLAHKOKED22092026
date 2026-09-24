@@ -304,7 +304,7 @@ def to_excel_bytes(df):
 # ==========================================
 st.title("⚡ Aplikasi Olah Data & Ekstrak PDF / ICONPRN")
 
-tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10 = st.tabs([
     "1️⃣ 1: Bikin Data Untuk Koked", 
     "2️⃣ 2: Hasil Koked",
     "3️⃣ 3: Eksport Pdf PB",
@@ -313,7 +313,8 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs([
     "6️⃣ 6: Olah Data",
     "7️⃣ 7: Info & Lokasi",
     "8️⃣ 8: Update Data (Versi 2)",
-    "9️⃣ 9: Isi Petugas"
+    "9️⃣ 9: Isi Petugas",
+    "🔟 10: Split Data"
 ])
 
 # ==========================================
@@ -1011,3 +1012,75 @@ with tab9:
                         )
                 except Exception as e:
                     st.error(f"❌ Terjadi kesalahan saat memproses data: {e}")
+
+# ==========================================
+# TAB 10: SPLIT DATA MENJADI MULTIPLE WORKSHEET
+# ==========================================
+import re # Pastikan library regex diimport untuk membersihkan nama sheet
+
+with tab10:
+    st.header("Tahap 10: Split Data ke Beberapa Worksheet")
+    st.write("Membagi satu tabel data menjadi beberapa worksheet (sheet) Excel berdasarkan nilai pada kolom tertentu (Misal: per IDPEL atau per Petugas).")
+    st.markdown("---")
+
+    file_t10 = st.file_uploader("Upload File Excel yang ingin di-split", type=['xlsx', 'xls'], key="t10_file")
+
+    if file_t10 is not None:
+        try:
+            df_t10 = pd.read_excel(file_t10)
+            st.write("Preview Data Asli:")
+            st.dataframe(df_t10.head(), use_container_width=True)
+
+            st.markdown("### Pengaturan Split Data")
+            # 1. Pilih kolom sebagai acuan
+            kolom_pilihan = st.selectbox("Split berdasarkan kolom (Specific column):", df_t10.columns.tolist())
+
+            # 2. Opsi Prefix & Suffix untuk nama sheet baru
+            col1, col2 = st.columns(2)
+            with col1:
+                prefix = st.text_input("Prefix (opsional):", help="Tambahan teks di depan nama sheet")
+            with col2:
+                suffix = st.text_input("Suffix (opsional):", help="Misal: Nik Padan")
+
+            if st.button("Proses Split Data", type="primary"):
+                with st.spinner("Sedang membagi data ke beberapa sheet..."):
+                    
+                    output_t10 = io.BytesIO()
+                    with pd.ExcelWriter(output_t10, engine='openpyxl') as writer:
+                        # Mengambil nilai unik dari kolom yang dipilih (abaikan yang kosong/NaN)
+                        nilai_unik = df_t10[kolom_pilihan].dropna().unique()
+
+                        for nilai in nilai_unik:
+                            # Filter data berdasarkan nilai saat ini
+                            df_filtered = df_t10[df_t10[kolom_pilihan] == nilai]
+
+                            # Pembuatan nama sheet
+                            nilai_str = str(nilai).strip()
+                            # Susun nama sheet dari Prefix + Nilai + Suffix
+                            sheet_name = f"{prefix} {nilai_str} {suffix}".strip()
+                            
+                            # Excel tidak mengizinkan karakter tertentu pada nama sheet dan maksimal 31 karakter
+                            # Hapus karakter terlarang: \ / * ? : [ ]
+                            sheet_name = re.sub(r'[\\/*?:\[\]]', '', sheet_name)
+                            sheet_name = sheet_name[:31] # Potong jika lebih dari 31 karakter
+
+                            if not sheet_name:
+                                sheet_name = "Data"
+
+                            # Simpan ke sheet tersendiri
+                            df_filtered.to_excel(writer, index=False, sheet_name=sheet_name)
+
+                    hasil_excel_t10 = output_t10.getvalue()
+                    
+                    st.success(f"✅ Data berhasil dipisah menjadi {len(nilai_unik)} sheet yang berbeda!")
+                    
+                    st.download_button(
+                        label="⬇️ Download Hasil Split Excel",
+                        data=hasil_excel_t10,
+                        file_name=f"Data_Split_Berdasarkan_{kolom_pilihan}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        key="t10_download"
+                    )
+
+        except Exception as e:
+            st.error(f"❌ Terjadi kesalahan saat membaca atau memproses file: {e}")
