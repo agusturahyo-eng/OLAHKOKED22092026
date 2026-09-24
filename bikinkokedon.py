@@ -833,79 +833,82 @@ with tab8:
     st.write("Mengisi kolom yang KOSONG di Data Lama dengan data dari Data Baru berdasarkan IDPEL. Data yang sudah terisi TIDAK akan ditimpa.")
     st.markdown("---")
 
-    # --- KOLOM UPLOAD FILE ---
-    col1, col2 = st.columns(2)
-
-    with col1:
+    col_l, col_b = st.columns(2)
+    with col_l:
         file_lama = st.file_uploader("Upload File Excel Data LAMA", type=['xlsx', 'xls'], key="t8_lama")
-
-    with col2:
+    with col_b:
         file_baru = st.file_uploader("Upload File Excel Data BARU", type=['xlsx', 'xls'], key="t8_baru")
 
-    # --- TOMBOL PROSES ---
     if st.button("Proses Update Master Data (Tab 8)", type="primary"):
-        if file_lama is None or file_baru is None:
-            st.warning("⚠️ Harap upload kedua file (Data LAMA dan Data BARU) terlebih dahulu!")
+        if not file_lama or not file_baru:
+            st.warning("⚠️ Harap upload KEDUA file Excel (Data Lama & Data Baru)!")
         else:
-            with st.spinner("Sedang memproses data..."):
+            with st.spinner("Sedang memproses update data..."):
                 try:
-                    # 1. Membaca file Excel dan memaksa semua kolom dibaca sebagai Teks
-                    df_lama = pd.read_excel(file_lama, dtype=str)
-                    df_baru = pd.read_excel(file_baru, dtype=str)
+                    df_lama = pd.read_excel(file_lama)
+                    df_baru = pd.read_excel(file_baru)
 
-                    # Standardisasi nama kolom menjadi huruf kecil
-                    df_lama.columns = df_lama.columns.str.lower()
-                    df_baru.columns = df_baru.columns.str.lower()
+                    # Fungsi untuk memberi penomoran pada nama kolom yang kembar (misal: keterangan, keterangan_1)
+                    def buat_kolom_unik(daftar_kolom):
+                        dilihat = {}
+                        kolom_baru = []
+                        for col in daftar_kolom:
+                            if col in dilihat:
+                                dilihat[col] += 1
+                                kolom_baru.append(f"{col}_{dilihat[col]}")
+                            else:
+                                dilihat[col] = 0
+                                kolom_baru.append(col)
+                        return kolom_baru
 
-                    # Cek apakah kolom 'idpel' ada di kedua file
+                    # 1. Standarisasi nama kolom ke huruf kecil & bersihkan spasi
+                    cols_lama = df_lama.columns.astype(str).str.strip().str.lower()
+                    cols_baru = df_baru.columns.astype(str).str.strip().str.lower()
+
+                    # 2. Terapkan fungsi kolom unik (TIDAK MENGHAPUS KOLOM)
+                    df_lama.columns = buat_kolom_unik(cols_lama)
+                    df_baru.columns = buat_kolom_unik(cols_baru)
+
+                    # Cek keberadaan kolom IDPEL
                     if 'idpel' not in df_lama.columns or 'idpel' not in df_baru.columns:
-                        st.error("❌ Error: Pastikan kedua file memiliki kolom bernama 'IDPEL' (atau 'idpel').")
+                        st.error("❌ Keduanya file harus memiliki kolom 'IDPEL'!")
                     else:
-                        # --- STANDARISASI SEL KOSONG ---
-                        # Mengubah string kosong (''), teks 'nan', atau spasi menjadi tipe data NaN sesungguhnya
-                        df_lama = df_lama.replace(r'^\s*$', np.nan, regex=True).replace(['nan', 'NaN', 'None'], np.nan)
-                        df_baru = df_baru.replace(r'^\s*$', np.nan, regex=True).replace(['nan', 'NaN', 'None'], np.nan)
+                        # Format kolom IDPEL agar konsisten (string tanpa angka desimal)
+                        df_lama['idpel'] = df_lama['idpel'].astype(str).str.replace('.0', '', regex=False).str.strip()
+                        df_baru['idpel'] = df_baru['idpel'].astype(str).str.replace('.0', '', regex=False).str.strip()
 
-                        # Menghapus duplikat idpel agar tidak error index
-                        df_lama.drop_duplicates(subset=['idpel'], keep='last', inplace=True)
-                        df_baru.drop_duplicates(subset=['idpel'], keep='last', inplace=True)
-
-                        # 2. LOGIKA UPDATE DATA (HANYA MENGISI YANG KOSONG)
+                        # Set IDPEL sebagai index untuk pencocokan
                         df_lama.set_index('idpel', inplace=True)
                         df_baru.set_index('idpel', inplace=True)
 
-                        # KUNCI PERUBAHAN: overwrite=False membuat fungsi ini HANYA mengisi sel yang bernilai NaN
-                        df_lama.update(df_baru, overwrite=False)
-                        
-                        # Kembalikan idpel menjadi kolom biasa
-                        df_hasil = df_lama.reset_index()
+                        # combine_first secara otomatis mengisi nilai NaN di df_lama dengan nilai dari df_baru
+                        df_result = df_lama.combine_first(df_baru)
 
-                        # Karena tipe datanya tadi diubah ke string, jika ada kolom yang masih kosong mungkin berubah jadi kata "nan" lagi saat ditampilkan
-                        # Kita bersihkan lagi agar saat di-download tampilannya rapi
-                        df_hasil = df_hasil.fillna("")
+                        # Kembalikan IDPEL menjadi kolom biasa
+                        df_result.reset_index(inplace=True)
 
-                        # 3. MENAMPILKAN HASIL
-                        st.success("✅ Master Data berhasil diupdate (hanya mengisi kolom yang kosong)!")
+                        # Mengembalikan urutan kolom seperti df_lama di awal (ditambah kolom baru di belakang jika ada)
+                        kolom_tersusun = [col for col in df_lama.columns if col in df_result.columns]
+                        kolom_sisa = [col for col in df_result.columns if col not in kolom_tersusun and col != 'idpel']
+                        df_result = df_result[['idpel'] + [c for c in kolom_tersusun if c != 'idpel'] + kolom_sisa]
+
+                        st.success("✅ Master Data berhasil diupdate (semua kolom dipertahankan)!")
                         st.write("Preview Hasil Update:")
-                        st.dataframe(df_hasil.head(10), use_container_width=True)
+                        st.dataframe(df_result.head(15), use_container_width=True)
 
-                        # 4. MEMBUAT FILE EXCEL UNTUK DIDOWNLOAD
-                        output = io.BytesIO()
-                        with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                            df_hasil.to_excel(writer, index=False, sheet_name='Master_Data_Update')
-                        hasil_excel = output.getvalue()
-
-                        # Tombol Download
+                        # Siapkan file Excel untuk didownload
+                        output_t8 = io.BytesIO()
+                        with pd.ExcelWriter(output_t8, engine='openpyxl') as writer:
+                            df_result.to_excel(writer, index=False, sheet_name='Master_Updated')
+                        
                         st.download_button(
-                            label="⬇️ Download Hasil Update Excel",
-                            data=hasil_excel,
-                            file_name="Master_Data_Updated_Hanya_Isi_Kosong.xlsx",
+                            label="⬇️ Download Hasil Update Master Data",
+                            data=output_t8.getvalue(),
+                            file_name="Master_Data_Updated.xlsx",
                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                             key="t8_download"
                         )
 
-                except Exception as e:
-                    st.error(f"❌ Terjadi kesalahan saat memproses data: {e}")
                 except Exception as e:
                     st.error(f"❌ Terjadi kesalahan saat memproses data: {e}")
 
