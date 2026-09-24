@@ -909,14 +909,14 @@ with tab8:
                     st.error(f"❌ Terjadi kesalahan saat memproses data: {e}")
 
 # ==========================================
-# TAB 9: ISI PETUGAS (BERDASARKAN DAYA, IDPEL, & KOKED)
+# TAB 9: ISI PETUGAS (BERDASARKAN DAYA, IDPEL, & KOKED/KDDK)
 # ==========================================
 with tab9:
     st.header("Tahap 9: Penentuan Petugas Otomatis")
-    st.write("Mengisi kolom Petugas secara otomatis berdasarkan logika Daya > 33000 (PLN), IDPEL khusus, dan 3 karakter tengah KOKED.")
+    st.write("Mengisi kolom Petugas secara otomatis berdasarkan logika Daya > 33000 (PLN), IDPEL khusus, dan 3 karakter tengah KOKED/KDDK.")
     st.markdown("---")
 
-    file_t9 = st.file_uploader("Upload File Excel (Harus memiliki kolom IDPEL, KOKED, DAYA)", type=['xlsx', 'xls'], key="t9_file")
+    file_t9 = st.file_uploader("Upload File Excel (Memiliki kolom IDPEL, KOKED/KDDK, DAYA)", type=['xlsx', 'xls'], key="t9_file")
 
     if st.button("Proses & Isi Petugas", type="primary"):
         if file_t9 is None:
@@ -926,28 +926,35 @@ with tab9:
                 try:
                     df = pd.read_excel(file_t9)
                     
-                    # Simpan nama kolom asli untuk dikembalikan nanti, ubah ke huruf kecil untuk kemudahan pengecekan
-                    kolom_asli = df.columns.tolist()
-                    df.columns = df.columns.str.lower()
+                    # Buat dataframe kerja dengan nama kolom huruf kecil semua untuk kemudahan olah data
+                    df_work = df.copy()
+                    df_work.columns = df_work.columns.astype(str).str.strip().str.lower()
 
-                    # Cek keberadaan 3 kolom wajib
-                    if not {'idpel', 'koked', 'daya'}.issubset(set(df.columns)):
-                        st.error("❌ Error: File Excel harus memiliki kolom bernama 'IDPEL', 'KOKED', dan 'DAYA'.")
+                    # Jika di Excel bernama 'kddk', otomatis disesuaikan menjadi 'koked'
+                    if 'kddk' in df_work.columns and 'koked' not in df_work.columns:
+                        df_work['koked'] = df_work['kddk']
+
+                    # Cek keberadaan kolom wajib
+                    if not {'idpel', 'koked', 'daya'}.issubset(set(df_work.columns)):
+                        st.error("❌ Error: File Excel harus memiliki kolom bernama 'IDPEL', 'KOKED' (atau 'KDDK'), dan 'DAYA'.")
                     else:
                         def tentukan_petugas_tab9(row):
-                            # Ambil data daya
-                            daya = pd.to_numeric(row['daya'], errors='coerce')
-                            if pd.isna(daya): daya = 0
-                            
-                            # Ambil data idpel dan koked
-                            idpel = str(row['idpel']).replace('.0', '').strip()
-                            koked = str(row['koked']).strip()
+                            # 1. Konversi Daya ke Angka
+                            try:
+                                daya_val = str(row['daya']).replace(',', '.').strip()
+                                daya = float(daya_val)
+                            except:
+                                daya = 0.0
 
-                            # Syarat 1: Daya > 33000 -> PLN
+                            # 2. Ambil nilai IDPEL & KOKED
+                            idpel = str(row['idpel']).replace('.0', '').strip() if pd.notna(row['idpel']) else ""
+                            koked = str(row['koked']).strip() if pd.notna(row['koked']) else ""
+
+                            # --- SYARAT 1: Daya > 33000 -> PLN ---
                             if daya > 33000:
                                 return "PLN"
                             
-                            # Syarat 2: Pengecekan IDPEL Khusus
+                            # --- SYARAT 2: IDPEL Khusus ---
                             idpel_khusus = {
                                 "524051069054": "c28", "524051263717": "c36", "524051265123": "c36",
                                 "524051104194": "c04", "524051000615": "c08", "524050867033": "c08"
@@ -955,7 +962,7 @@ with tab9:
                             if idpel in idpel_khusus:
                                 return idpel_khusus[idpel]
                             
-                            # Syarat 3: Pengecekan 3 karakter dari index ke-4 KOKED (Sama dengan fungsi MID Excel)
+                            # --- SYARAT 3: MID 3 karakter KOKED (karakter ke-4 s/d 6) ---
                             if len(koked) >= 6:
                                 kode_mid = koked[3:6].upper()
                                 mapping_kddk = {
@@ -972,20 +979,24 @@ with tab9:
                                 if kode_mid in mapping_kddk:
                                     return mapping_kddk[kode_mid]
                             
-                            # Jika tidak masuk syarat manapun
                             return "BARU"
 
-                        # Menjalankan fungsi ke setiap baris data
-                        df['petugas'] = df.apply(tentukan_petugas_tab9, axis=1)
+                        # Jalankan fungsi penentuan petugas
+                        hasil_petugas = df_work.apply(tentukan_petugas_tab9, axis=1)
 
-                        # Mengembalikan nama kolom ke format kapital semula dan menyisipkan kolom PETUGAS di paling kanan
-                        df.columns = kolom_asli + ['PETUGAS']
+                        # Cari nama kolom 'petugas' asli di file Excel (jika sudah ada)
+                        col_petugas_asli = next((c for c in df.columns if str(c).strip().lower() == 'petugas'), None)
+                        
+                        if col_petugas_asli:
+                            df[col_petugas_asli] = hasil_petugas
+                        else:
+                            df['petugas'] = hasil_petugas
 
                         st.success("✅ Kolom Petugas berhasil diisi!")
-                        st.write("Preview Data:")
-                        st.dataframe(df.head(10), use_container_width=True)
+                        st.write("Preview Hasil Data:")
+                        st.dataframe(df.head(15), use_container_width=True)
 
-                        # Membuat file Excel untuk didownload
+                        # Download File
                         output = io.BytesIO()
                         with pd.ExcelWriter(output, engine='openpyxl') as writer:
                             df.to_excel(writer, index=False, sheet_name='Data_Petugas')
