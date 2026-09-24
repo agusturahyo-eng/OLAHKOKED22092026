@@ -828,9 +828,11 @@ with tab7:
 # ==========================================
 # TAB 8: UPDATE MASTER DATA (VERSI 2)
 # ==========================================
+import numpy as np
+
 with tab8:
     st.header("Tahap 8: Update Master Data Pelanggan (Versi 2)")
-    st.write("Mengisi kolom yang KOSONG di Data Lama dengan data dari Data Baru berdasarkan IDPEL. Data yang sudah terisi TIDAK akan ditimpa.")
+    st.write("Mengisi kolom yang KOSONG di Data Lama dengan data dari Data Baru berdasarkan IDPEL. TIDAK MENAMBAH KOLOM BARU dan data yang sudah terisi TIDAK akan ditimpa.")
     st.markdown("---")
 
     col_l, col_b = st.columns(2)
@@ -848,7 +850,7 @@ with tab8:
                     df_lama = pd.read_excel(file_lama)
                     df_baru = pd.read_excel(file_baru)
 
-                    # Fungsi untuk memberi penomoran pada nama kolom yang kembar (misal: keterangan, keterangan_1)
+                    # Fungsi untuk memberi penomoran pada nama kolom yang kembar (TIDAK MENGHAPUS KOLOM)
                     def buat_kolom_unik(daftar_kolom):
                         dilihat = {}
                         kolom_baru = []
@@ -861,18 +863,24 @@ with tab8:
                                 kolom_baru.append(col)
                         return kolom_baru
 
-                    # 1. Standarisasi nama kolom ke huruf kecil & bersihkan spasi
+                    # 1. Standarisasi nama kolom ke huruf kecil
                     cols_lama = df_lama.columns.astype(str).str.strip().str.lower()
                     cols_baru = df_baru.columns.astype(str).str.strip().str.lower()
 
-                    # 2. Terapkan fungsi kolom unik (TIDAK MENGHAPUS KOLOM)
+                    # 2. Terapkan fungsi kolom unik
                     df_lama.columns = buat_kolom_unik(cols_lama)
                     df_baru.columns = buat_kolom_unik(cols_baru)
+                    
+                    # SIMPAN URUTAN & NAMA KOLOM DATA LAMA (Untuk membuang kolom ekstra dari data baru nanti)
+                    kolom_format_lama = df_lama.columns.tolist()
 
                     # Cek keberadaan kolom IDPEL
                     if 'idpel' not in df_lama.columns or 'idpel' not in df_baru.columns:
                         st.error("❌ Keduanya file harus memiliki kolom 'IDPEL'!")
                     else:
+                        # Ubah sel yang isinya hanya spasi/kosong menjadi NaN agar bisa diupdate
+                        df_lama = df_lama.replace(r'^\s*$', np.nan, regex=True)
+
                         # Format kolom IDPEL agar konsisten (string tanpa angka desimal)
                         df_lama['idpel'] = df_lama['idpel'].astype(str).str.replace('.0', '', regex=False).str.strip()
                         df_baru['idpel'] = df_baru['idpel'].astype(str).str.replace('.0', '', regex=False).str.strip()
@@ -881,18 +889,17 @@ with tab8:
                         df_lama.set_index('idpel', inplace=True)
                         df_baru.set_index('idpel', inplace=True)
 
-                        # combine_first secara otomatis mengisi nilai NaN di df_lama dengan nilai dari df_baru
-                        df_result = df_lama.combine_first(df_baru)
+                        # df.update dengan overwrite=False HANYA mengisi cell yang kosong (NaN) di Data Lama
+                        # dan MENGABAIKAN kolom-kolom baru yang tidak ada di Data Lama
+                        df_lama.update(df_baru, overwrite=False)
 
                         # Kembalikan IDPEL menjadi kolom biasa
-                        df_result.reset_index(inplace=True)
+                        df_lama.reset_index(inplace=True)
 
-                        # Mengembalikan urutan kolom seperti df_lama di awal (ditambah kolom baru di belakang jika ada)
-                        kolom_tersusun = [col for col in df_lama.columns if col in df_result.columns]
-                        kolom_sisa = [col for col in df_result.columns if col not in kolom_tersusun and col != 'idpel']
-                        df_result = df_result[['idpel'] + [c for c in kolom_tersusun if c != 'idpel'] + kolom_sisa]
+                        # Pastikan format dan urutan kolom persis seperti Data LAMA di awal
+                        df_result = df_lama[kolom_format_lama]
 
-                        st.success("✅ Master Data berhasil diupdate (semua kolom dipertahankan)!")
+                        st.success("✅ Master Data berhasil diupdate (Hanya mengisi sel kosong di kolom yang sudah ada)!")
                         st.write("Preview Hasil Update:")
                         st.dataframe(df_result.head(15), use_container_width=True)
 
