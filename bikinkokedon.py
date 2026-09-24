@@ -847,10 +847,12 @@ with tab8:
         else:
             with st.spinner("Sedang memproses update data..."):
                 try:
-                    df_lama = pd.read_excel(file_lama)
-                    df_baru = pd.read_excel(file_baru)
+                    # --- PERBAIKAN TIPE DATA ---
+                    # Membaca file sebagai Teks (String) dari awal agar NIK tidak berubah jadi E+15
+                    df_lama = pd.read_excel(file_lama, dtype=str)
+                    df_baru = pd.read_excel(file_baru, dtype=str)
 
-                    # Fungsi penomoran kolom kembar agar tidak terjadi kesalahan nama kolom
+                    # Fungsi penomoran kolom kembar
                     def buat_kolom_unik(daftar_kolom):
                         dilihat = {}
                         kolom_baru = []
@@ -876,13 +878,21 @@ with tab8:
                     if 'idpel' not in df_lama.columns or 'idpel' not in df_baru.columns:
                         st.error("❌ Kedua file harus memiliki kolom 'IDPEL'!")
                     else:
-                        # Bersihkan spasi kosong agar dibaca sebagai NaN
-                        df_lama = df_lama.replace(r'^\s*$', np.nan, regex=True)
-                        df_baru = df_baru.replace(r'^\s*$', np.nan, regex=True)
+                        # Bersihkan spasi kosong dan nilai teks 'nan' bawaan Pandas agar dibaca sebagai sel kosong (NaN)
+                        df_lama = df_lama.replace(r'^\s*$', np.nan, regex=True).replace(['nan', 'NaN', '<NA>'], np.nan)
+                        df_baru = df_baru.replace(r'^\s*$', np.nan, regex=True).replace(['nan', 'NaN', '<NA>'], np.nan)
 
-                        # Format IDPEL agar seragam
-                        df_lama['idpel'] = df_lama['idpel'].astype(str).str.replace('.0', '', regex=False).str.strip()
-                        df_baru['idpel'] = df_baru['idpel'].astype(str).str.replace('.0', '', regex=False).str.strip()
+                        # --- PERBAIKAN FORMAT KOLOM KHUSUS ---
+                        # Menghapus akhiran desimal (.0) jika ada pada IDPEL atau NIK
+                        for col in df_lama.columns:
+                            if 'idpel' in col or 'nik' in col:
+                                df_lama[col] = df_lama[col].astype(str).str.replace('.0', '', regex=False).str.strip()
+                                df_lama[col] = df_lama[col].replace('nan', np.nan)
+                        
+                        for col in df_baru.columns:
+                            if 'idpel' in col or 'nik' in col:
+                                df_baru[col] = df_baru[col].astype(str).str.replace('.0', '', regex=False).str.strip()
+                                df_baru[col] = df_baru[col].replace('nan', np.nan)
 
                         # Hapus duplikat IDPEL pada Data Baru
                         df_baru = df_baru.drop_duplicates(subset=['idpel'], keep='first')
@@ -891,9 +901,6 @@ with tab8:
                         df_lama.set_index('idpel', inplace=True)
                         df_baru.set_index('idpel', inplace=True)
 
-                        # --- PENANGANAN ERROR TYPE: Longgarkan tipe data df_lama menjadi object ---
-                        df_lama = df_lama.astype(object)
-
                         # Update hanya mengisi sel kosong di df_lama tanpa menimpa data yang ada
                         df_lama.update(df_baru, overwrite=False)
 
@@ -901,7 +908,7 @@ with tab8:
                         df_lama.reset_index(inplace=True)
                         df_result = df_lama[kolom_format_lama]
 
-                        st.success("✅ Master Data berhasil diupdate (Hanya mengisi sel kosong di kolom yang sudah ada)!")
+                        st.success("✅ Master Data berhasil diupdate (Format NIK & angka panjang tetap aman)!")
                         st.write("Preview Hasil Update:")
                         st.dataframe(df_result.head(15), use_container_width=True)
 
