@@ -850,7 +850,7 @@ with tab8:
                     df_lama = pd.read_excel(file_lama)
                     df_baru = pd.read_excel(file_baru)
 
-                    # Fungsi untuk memberi penomoran pada nama kolom yang kembar (TIDAK MENGHAPUS KOLOM)
+                    # Fungsi penomoran kolom kembar agar tidak terjadi kesalahan nama kolom
                     def buat_kolom_unik(daftar_kolom):
                         dilihat = {}
                         kolom_baru = []
@@ -867,36 +867,35 @@ with tab8:
                     cols_lama = df_lama.columns.astype(str).str.strip().str.lower()
                     cols_baru = df_baru.columns.astype(str).str.strip().str.lower()
 
-                    # 2. Terapkan fungsi kolom unik
+                    # 2. Terapkan fungsi penanganan kolom unik
                     df_lama.columns = buat_kolom_unik(cols_lama)
                     df_baru.columns = buat_kolom_unik(cols_baru)
                     
-                    # SIMPAN URUTAN & NAMA KOLOM DATA LAMA (Untuk membuang kolom ekstra dari data baru nanti)
                     kolom_format_lama = df_lama.columns.tolist()
 
-                    # Cek keberadaan kolom IDPEL
                     if 'idpel' not in df_lama.columns or 'idpel' not in df_baru.columns:
-                        st.error("❌ Keduanya file harus memiliki kolom 'IDPEL'!")
+                        st.error("❌ Kedua file harus memiliki kolom 'IDPEL'!")
                     else:
-                        # Ubah sel yang isinya hanya spasi/kosong menjadi NaN agar bisa diupdate
+                        # Bersihkan spasi kosong agar dibaca sebagai NaN
                         df_lama = df_lama.replace(r'^\s*$', np.nan, regex=True)
+                        df_baru = df_baru.replace(r'^\s*$', np.nan, regex=True)
 
-                        # Format kolom IDPEL agar konsisten (string tanpa angka desimal)
+                        # Format IDPEL agar seragam
                         df_lama['idpel'] = df_lama['idpel'].astype(str).str.replace('.0', '', regex=False).str.strip()
                         df_baru['idpel'] = df_baru['idpel'].astype(str).str.replace('.0', '', regex=False).str.strip()
 
-                        # Set IDPEL sebagai index untuk pencocokan
+                        # --- PENANGANAN ERROR: Hapus duplikat IDPEL pada Data Baru ---
+                        df_baru = df_baru.drop_duplicates(subset=['idpel'], keep='first')
+
+                        # Set IDPEL sebagai Index
                         df_lama.set_index('idpel', inplace=True)
                         df_baru.set_index('idpel', inplace=True)
 
-                        # df.update dengan overwrite=False HANYA mengisi cell yang kosong (NaN) di Data Lama
-                        # dan MENGABAIKAN kolom-kolom baru yang tidak ada di Data Lama
+                        # Update hanya mengisi sel kosong di df_lama tanpa menimpa data yang ada
                         df_lama.update(df_baru, overwrite=False)
 
-                        # Kembalikan IDPEL menjadi kolom biasa
+                        # Kembalikan struktur IDPEL dan urutan kolom asli
                         df_lama.reset_index(inplace=True)
-
-                        # Pastikan format dan urutan kolom persis seperti Data LAMA di awal
                         df_result = df_lama[kolom_format_lama]
 
                         st.success("✅ Master Data berhasil diupdate (Hanya mengisi sel kosong di kolom yang sudah ada)!")
