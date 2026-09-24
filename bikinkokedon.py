@@ -1076,6 +1076,9 @@ with tab9:
 # ==========================================
 import re
 import zipfile
+import io
+import pandas as pd
+import openpyxl
 
 with tab10:
     st.header("Tahap 10: Split Data ke Beberapa Worksheet atau File")
@@ -1086,7 +1089,17 @@ with tab10:
 
     if file_t10 is not None:
         try:
-            df_t10 = pd.read_excel(file_t10)
+            # --- PERBAIKAN 1: Baca seluruh file sebagai String (Teks) dari awal ---
+            df_t10 = pd.read_excel(file_t10, dtype=str)
+            
+            # Bersihkan "nan" atau ".0" yang mungkin terbawa saat dibaca sebagai string
+            for col in df_t10.columns:
+                df_t10[col] = df_t10[col].fillna("").astype(str)
+                df_t10[col] = df_t10[col].replace({'nan': '', 'None': '', '<NA>': ''})
+                # Hapus akhiran .0 untuk kolom IDPEL atau NIK jika ada
+                if 'idpel' in str(col).lower() or 'nik' in str(col).lower():
+                    df_t10[col] = df_t10[col].str.replace(r'\.0$', '', regex=True)
+
             st.write("Preview Data Asli:")
             st.dataframe(df_t10.head(), use_container_width=True)
 
@@ -1112,8 +1125,9 @@ with tab10:
             if st.button("Proses Split Data", type="primary"):
                 with st.spinner("Sedang membagi data..."):
                     
-                    # Mengambil nilai unik dari kolom yang dipilih (abaikan yang kosong/NaN)
-                    nilai_unik = df_t10[kolom_pilihan].dropna().unique()
+                    # Mengambil nilai unik, abaikan yang kosong
+                    df_t10_filtered = df_t10[df_t10[kolom_pilihan].str.strip() != ""]
+                    nilai_unik = df_t10_filtered[kolom_pilihan].unique()
 
                     if mode_split == "Multiple Sheets (1 File Excel)":
                         output_t10 = io.BytesIO()
@@ -1124,12 +1138,24 @@ with tab10:
                                 # Pembuatan nama sheet
                                 nilai_str = str(nilai).strip()
                                 nama_custom = f"{prefix} {nilai_str} {suffix}".strip()
-                                
-                                # Bersihkan karakter terlarang untuk Excel
                                 nama_bersih = re.sub(r'[\\/*?:\[\]]', '', nama_custom)[:31]
                                 if not nama_bersih: nama_bersih = "Data"
 
                                 df_filtered.to_excel(writer, index=False, sheet_name=nama_bersih)
+
+                                # --- PERBAIKAN 2: Kunci Teks Anti-E+15 untuk setiap Sheet ---
+                                ws = writer.sheets[nama_bersih]
+                                for col in ws.columns:
+                                    max_len = 0
+                                    col_letter = openpyxl.utils.get_column_letter(col[0].column)
+                                    for cell in col:
+                                        if cell.value is not None and str(cell.value).strip() != "":
+                                            cell.value = str(cell.value)
+                                            cell.data_type = 's'
+                                            cell.number_format = '@'
+                                        val_str = str(cell.value) if cell.value is not None else ""
+                                        max_len = max(max_len, len(val_str))
+                                    ws.column_dimensions[col_letter].width = max(max_len + 3, 12)
 
                         st.success(f"✅ Data berhasil dipisah menjadi {len(nilai_unik)} sheet dalam 1 file Excel!")
                         st.download_button(
@@ -1158,6 +1184,20 @@ with tab10:
                                 excel_buffer = io.BytesIO()
                                 with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
                                     df_filtered.to_excel(writer, index=False, sheet_name="Data")
+                                    
+                                    # --- PERBAIKAN 3: Kunci Teks Anti-E+15 untuk setiap File ---
+                                    ws = writer.sheets["Data"]
+                                    for col in ws.columns:
+                                        max_len = 0
+                                        col_letter = openpyxl.utils.get_column_letter(col[0].column)
+                                        for cell in col:
+                                            if cell.value is not None and str(cell.value).strip() != "":
+                                                cell.value = str(cell.value)
+                                                cell.data_type = 's'
+                                                cell.number_format = '@'
+                                            val_str = str(cell.value) if cell.value is not None else ""
+                                            max_len = max(max_len, len(val_str))
+                                        ws.column_dimensions[col_letter].width = max(max_len + 3, 12)
                                 
                                 # Simpan file excel ke dalam ZIP
                                 zip_file.writestr(nama_file, excel_buffer.getvalue())
