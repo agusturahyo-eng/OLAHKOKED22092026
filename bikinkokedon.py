@@ -946,6 +946,8 @@ with tab8:
 # ==========================================
 # TAB 9: ISI PETUGAS (BERDASARKAN DAYA, IDPEL, & KOKED/KDDK)
 # ==========================================
+import openpyxl
+
 with tab9:
     st.header("Tahap 9: Penentuan Petugas Otomatis")
     st.write("Mengisi kolom Petugas secara otomatis berdasarkan logika Daya > 33000 (PLN), IDPEL khusus, dan 3 karakter tengah KOKED/KDDK.")
@@ -959,9 +961,10 @@ with tab9:
         else:
             with st.spinner("Sedang memproses penentuan petugas..."):
                 try:
-                    df = pd.read_excel(file_t9)
+                    # --- PERBAIKAN: Baca file sebagai Teks (String) dari awal ---
+                    df = pd.read_excel(file_t9, dtype=str)
                     
-                    # Buat dataframe kerja dengan nama kolom huruf kecil semua untuk kemudahan olah data
+                    # Buat dataframe kerja dengan nama kolom huruf kecil semua
                     df_work = df.copy()
                     df_work.columns = df_work.columns.astype(str).str.strip().str.lower()
 
@@ -982,8 +985,8 @@ with tab9:
                                 daya = 0.0
 
                             # 2. Ambil nilai IDPEL & KOKED
-                            idpel = str(row['idpel']).replace('.0', '').strip() if pd.notna(row['idpel']) else ""
-                            koked = str(row['koked']).strip() if pd.notna(row['koked']) else ""
+                            idpel = str(row['idpel']).replace('.0', '').strip() if pd.notna(row['idpel']) and str(row['idpel']).lower() != 'nan' else ""
+                            koked = str(row['koked']).strip() if pd.notna(row['koked']) and str(row['koked']).lower() != 'nan' else ""
 
                             # --- SYARAT 1: Daya > 33000 -> PLN ---
                             if daya > 33000:
@@ -997,7 +1000,7 @@ with tab9:
                             if idpel in idpel_khusus:
                                 return idpel_khusus[idpel]
                             
-                            # --- SYARAT 3: MID 3 karakter KOKED (karakter ke-4 s/d 6) ---
+                            # --- SYARAT 3: MID 3 karakter KOKED ---
                             if len(koked) >= 6:
                                 kode_mid = koked[3:6].upper()
                                 mapping_kddk = {
@@ -1016,10 +1019,8 @@ with tab9:
                             
                             return "BARU"
 
-                        # Jalankan fungsi penentuan petugas
                         hasil_petugas = df_work.apply(tentukan_petugas_tab9, axis=1)
 
-                        # Cari nama kolom 'petugas' asli di file Excel (jika sudah ada)
                         col_petugas_asli = next((c for c in df.columns if str(c).strip().lower() == 'petugas'), None)
                         
                         if col_petugas_asli:
@@ -1027,19 +1028,42 @@ with tab9:
                         else:
                             df['petugas'] = hasil_petugas
 
+                        # --- PERBAIKAN: Bersihkan data sebelum di-export ---
+                        for col in df.columns:
+                            df[col] = df[col].fillna("").astype(str)
+                            df[col] = df[col].replace({'nan': '', 'None': '', '<NA>': ''})
+                            # Hapus desimal .0 jika ada yang tersisa di IDPEL/NIK
+                            if 'idpel' in col.lower() or 'nik' in col.lower():
+                                df[col] = df[col].str.replace(r'\.0$', '', regex=True)
+
                         st.success("✅ Kolom Petugas berhasil diisi!")
                         st.write("Preview Hasil Data:")
                         st.dataframe(df.head(15), use_container_width=True)
 
-                        # Download File
+                        # --- PERBAIKAN: Export dengan proteksi sel Teks ---
                         output = io.BytesIO()
                         with pd.ExcelWriter(output, engine='openpyxl') as writer:
                             df.to_excel(writer, index=False, sheet_name='Data_Petugas')
-                        hasil_excel = output.getvalue()
+                            
+                            ws = writer.sheets['Data_Petugas']
+                            for col in ws.columns:
+                                max_len = 0
+                                col_letter = openpyxl.utils.get_column_letter(col[0].column)
+                                for cell in col:
+                                    if cell.value is not None and str(cell.value).strip() != "":
+                                        # Kunci sebagai String murni
+                                        cell.value = str(cell.value)
+                                        cell.data_type = 's'
+                                        cell.number_format = '@'
+
+                                    val_str = str(cell.value) if cell.value is not None else ""
+                                    max_len = max(max_len, len(val_str))
+                                
+                                ws.column_dimensions[col_letter].width = max(max_len + 3, 12)
 
                         st.download_button(
                             label="⬇️ Download Hasil Excel",
-                            data=hasil_excel,
+                            data=output.getvalue(),
                             file_name="Data_Isi_Petugas.xlsx",
                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                             key="t9_download"
