@@ -829,7 +829,7 @@ with tab7:
 # TAB 8: UPDATE MASTER DATA (VERSI 2)
 # ==========================================
 import numpy as np
-import openpyxl  # Pastikan openpyxl terimport
+import openpyxl
 
 with tab8:
     st.header("Tahap 8: Update Master Data Pelanggan (Versi 2)")
@@ -848,11 +848,10 @@ with tab8:
         else:
             with st.spinner("Sedang memproses update data..."):
                 try:
-                    # Membaca file sebagai Teks (String) dari awal
+                    # Membaca file sebagai Teks (String)
                     df_lama = pd.read_excel(file_lama, dtype=str)
                     df_baru = pd.read_excel(file_baru, dtype=str)
 
-                    # Fungsi penomoran kolom kembar
                     def buat_kolom_unik(daftar_kolom):
                         dilihat = {}
                         kolom_baru = []
@@ -865,11 +864,9 @@ with tab8:
                                 kolom_baru.append(col)
                         return kolom_baru
 
-                    # 1. Standarisasi nama kolom ke huruf kecil
                     cols_lama = df_lama.columns.astype(str).str.strip().str.lower()
                     cols_baru = df_baru.columns.astype(str).str.strip().str.lower()
 
-                    # 2. Terapkan fungsi penanganan kolom unik
                     df_lama.columns = buat_kolom_unik(cols_lama)
                     df_baru.columns = buat_kolom_unik(cols_baru)
                     
@@ -878,55 +875,61 @@ with tab8:
                     if 'idpel' not in df_lama.columns or 'idpel' not in df_baru.columns:
                         st.error("❌ Kedua file harus memiliki kolom 'IDPEL'!")
                     else:
-                        # Bersihkan spasi kosong dan nilai 'nan'
+                        # Bersihkan spasi kosong
                         df_lama = df_lama.replace(r'^\s*$', np.nan, regex=True).replace(['nan', 'NaN', '<NA>'], np.nan)
                         df_baru = df_baru.replace(r'^\s*$', np.nan, regex=True).replace(['nan', 'NaN', '<NA>'], np.nan)
 
-                        # Menghapus akhiran desimal (.0) jika ada
+                        # Hapus .0 di akhiran IDPEL & NIK
                         for col in df_lama.columns:
-                            df_lama[col] = df_lama[col].astype(str).str.replace('.0', '', regex=False).str.strip()
+                            df_lama[col] = df_lama[col].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
                             df_lama[col] = df_lama[col].replace(['nan', 'None', '<NA>'], np.nan)
                         
                         for col in df_baru.columns:
-                            df_baru[col] = df_baru[col].astype(str).str.replace('.0', '', regex=False).str.strip()
+                            df_baru[col] = df_baru[col].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
                             df_baru[col] = df_baru[col].replace(['nan', 'None', '<NA>'], np.nan)
 
-                        # Hapus duplikat IDPEL pada Data Baru
                         df_baru = df_baru.drop_duplicates(subset=['idpel'], keep='first')
 
-                        # Set IDPEL sebagai Index
                         df_lama.set_index('idpel', inplace=True)
                         df_baru.set_index('idpel', inplace=True)
 
-                        # Update hanya mengisi sel kosong di df_lama
                         df_lama.update(df_baru, overwrite=False)
 
-                        # Kembalikan struktur IDPEL dan urutan kolom asli
                         df_lama.reset_index(inplace=True)
                         df_result = df_lama[kolom_format_lama]
 
-                        # Bersihkan data untuk ekspor
-                        df_export = df_result.fillna("")
+                        # Bersihkan semua data jadi string dan kosongkan NaN sebelum diekspor
+                        df_export = df_result.copy()
+                        for col in df_export.columns:
+                            df_export[col] = df_export[col].fillna("").astype(str)
+                            df_export[col] = df_export[col].replace({'nan': '', 'None': '', '<NA>': ''})
 
                         st.success("✅ Master Data berhasil diupdate!")
                         st.write("Preview Hasil Update:")
                         st.dataframe(df_result.head(15), use_container_width=True)
 
-                        # Siapkan file Excel untuk didownload
                         output_t8 = io.BytesIO()
                         with pd.ExcelWriter(output_t8, engine='openpyxl') as writer:
                             df_export.to_excel(writer, index=False, sheet_name='Master_Updated')
                             
-                            # --- SOLUSI AGAR EXCEL TIDAK MENGUBAH JADI E+15 ---
+                            # --- SOLUSI AMPUH: PAKSA NILAI & TIPE DATA SEL JADI TEKS ---
                             ws = writer.sheets['Master_Updated']
                             for col in ws.columns:
                                 max_len = 0
                                 col_letter = openpyxl.utils.get_column_letter(col[0].column)
                                 for cell in col:
-                                    cell.number_format = '@'  # Kunci format sel Excel menjadi TEKS
+                                    if cell.value is not None and str(cell.value).strip() != "":
+                                        # Paksa isi data (value) menjadi tipe teks di sistem internal Python
+                                        cell.value = str(cell.value)
+                                        # Kunci perlakukan tipe (data_type) menjadi string murni ('s')
+                                        cell.data_type = 's'
+                                        # Set visual format teks
+                                        cell.number_format = '@'
+
                                     val_str = str(cell.value) if cell.value is not None else ""
                                     max_len = max(max_len, len(val_str))
-                                # Atur lebar kolom otomatis agar angka 16 digit tidak terpotong
+                                
+                                # Lebarkan kolom
                                 ws.column_dimensions[col_letter].width = max(max_len + 3, 12)
 
                         st.download_button(
@@ -939,6 +942,7 @@ with tab8:
 
                 except Exception as e:
                     st.error(f"❌ Terjadi kesalahan saat memproses data: {e}")
+                    
 # ==========================================
 # TAB 9: ISI PETUGAS (BERDASARKAN DAYA, IDPEL, & KOKED/KDDK)
 # ==========================================
