@@ -884,12 +884,15 @@ with tab8:
                         df_lama['idpel'] = df_lama['idpel'].astype(str).str.replace('.0', '', regex=False).str.strip()
                         df_baru['idpel'] = df_baru['idpel'].astype(str).str.replace('.0', '', regex=False).str.strip()
 
-                        # --- PENANGANAN ERROR: Hapus duplikat IDPEL pada Data Baru ---
+                        # Hapus duplikat IDPEL pada Data Baru
                         df_baru = df_baru.drop_duplicates(subset=['idpel'], keep='first')
 
                         # Set IDPEL sebagai Index
                         df_lama.set_index('idpel', inplace=True)
                         df_baru.set_index('idpel', inplace=True)
+
+                        # --- PENANGANAN ERROR TYPE: Longgarkan tipe data df_lama menjadi object ---
+                        df_lama = df_lama.astype(object)
 
                         # Update hanya mengisi sel kosong di df_lama tanpa menimpa data yang ada
                         df_lama.update(df_baru, overwrite=False)
