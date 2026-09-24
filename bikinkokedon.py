@@ -304,7 +304,7 @@ def to_excel_bytes(df):
 # ==========================================
 st.title("⚡ Aplikasi Olah Data & Ekstrak PDF / ICONPRN")
 
-tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs([
     "1️⃣ 1: Bikin Data Untuk Koked", 
     "2️⃣ 2: Hasil Koked",
     "3️⃣ 3: Eksport Pdf PB",
@@ -312,7 +312,8 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
     "5️⃣ 5: eksport ICONPRN",
     "6️⃣ 6: Olah Data",
     "7️⃣ 7: Info & Lokasi",
-    "8️⃣ 8: Update Data (Versi 2)"
+    "8️⃣ 8: Update Data (Versi 2)",
+    "9️⃣ 9: Isi Petugas"
 ])
 
 # ==========================================
@@ -904,5 +905,98 @@ with tab8:
 
                 except Exception as e:
                     st.error(f"❌ Terjadi kesalahan saat memproses data: {e}")
+                except Exception as e:
+                    st.error(f"❌ Terjadi kesalahan saat memproses data: {e}")
+
+# ==========================================
+# TAB 9: ISI PETUGAS (BERDASARKAN DAYA, IDPEL, & KOKED)
+# ==========================================
+with tab9:
+    st.header("Tahap 9: Penentuan Petugas Otomatis")
+    st.write("Mengisi kolom Petugas secara otomatis berdasarkan logika Daya > 33000 (PLN), IDPEL khusus, dan 3 karakter tengah KOKED.")
+    st.markdown("---")
+
+    file_t9 = st.file_uploader("Upload File Excel (Harus memiliki kolom IDPEL, KOKED, DAYA)", type=['xlsx', 'xls'], key="t9_file")
+
+    if st.button("Proses & Isi Petugas", type="primary"):
+        if file_t9 is None:
+            st.warning("⚠️ Harap upload file Excel terlebih dahulu!")
+        else:
+            with st.spinner("Sedang memproses penentuan petugas..."):
+                try:
+                    df = pd.read_excel(file_t9)
+                    
+                    # Simpan nama kolom asli untuk dikembalikan nanti, ubah ke huruf kecil untuk kemudahan pengecekan
+                    kolom_asli = df.columns.tolist()
+                    df.columns = df.columns.str.lower()
+
+                    # Cek keberadaan 3 kolom wajib
+                    if not {'idpel', 'koked', 'daya'}.issubset(set(df.columns)):
+                        st.error("❌ Error: File Excel harus memiliki kolom bernama 'IDPEL', 'KOKED', dan 'DAYA'.")
+                    else:
+                        def tentukan_petugas_tab9(row):
+                            # Ambil data daya
+                            daya = pd.to_numeric(row['daya'], errors='coerce')
+                            if pd.isna(daya): daya = 0
+                            
+                            # Ambil data idpel dan koked
+                            idpel = str(row['idpel']).replace('.0', '').strip()
+                            koked = str(row['koked']).strip()
+
+                            # Syarat 1: Daya > 33000 -> PLN
+                            if daya > 33000:
+                                return "PLN"
+                            
+                            # Syarat 2: Pengecekan IDPEL Khusus
+                            idpel_khusus = {
+                                "524051069054": "c28", "524051263717": "c36", "524051265123": "c36",
+                                "524051104194": "c04", "524051000615": "c08", "524050867033": "c08"
+                            }
+                            if idpel in idpel_khusus:
+                                return idpel_khusus[idpel]
+                            
+                            # Syarat 3: Pengecekan 3 karakter dari index ke-4 KOKED (Sama dengan fungsi MID Excel)
+                            if len(koked) >= 6:
+                                kode_mid = koked[3:6].upper()
+                                mapping_kddk = {
+                                    "JCA": "c01", "TAA": "c02", "JCB": "c03", "JCC": "c04", "NCD": "c05",
+                                    "KBA": "c06", "TAB": "c07", "JCE": "c08", "TAC": "c09", "MBB": "c10",
+                                    "KAD": "c11", "TAE": "c12", "KCF": "c13", "JCG": "c14", "TAF": "c15",
+                                    "KAG": "c16", "BBC": "c17", "TAH": "c18", "BCK": "c19", "NCH": "c20",
+                                    "JBE": "c21", "MBF": "c22", "MBG": "c23", "KBH": "c24", "KBI": "c25",
+                                    "KAI": "c26", "MCI": "c27", "KBJ": "c28", "JCJ": "c29", "TAJ": "c30",
+                                    "MBK": "c31", "KBL": "c32", "TAK": "c33", "KAL": "c34", "JCL": "c35",
+                                    "MBD": "c36", "KCJ": "c29", "NBJ": "c28", "TAI": "c26", "BBD": "c19",
+                                    "KCG": "c29", "MBM": "c23"
+                                }
+                                if kode_mid in mapping_kddk:
+                                    return mapping_kddk[kode_mid]
+                            
+                            # Jika tidak masuk syarat manapun
+                            return "BARU"
+
+                        # Menjalankan fungsi ke setiap baris data
+                        df['petugas'] = df.apply(tentukan_petugas_tab9, axis=1)
+
+                        # Mengembalikan nama kolom ke format kapital semula dan menyisipkan kolom PETUGAS di paling kanan
+                        df.columns = kolom_asli + ['PETUGAS']
+
+                        st.success("✅ Kolom Petugas berhasil diisi!")
+                        st.write("Preview Data:")
+                        st.dataframe(df.head(10), use_container_width=True)
+
+                        # Membuat file Excel untuk didownload
+                        output = io.BytesIO()
+                        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                            df.to_excel(writer, index=False, sheet_name='Data_Petugas')
+                        hasil_excel = output.getvalue()
+
+                        st.download_button(
+                            label="⬇️ Download Hasil Excel",
+                            data=hasil_excel,
+                            file_name="Data_Isi_Petugas.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            key="t9_download"
+                        )
                 except Exception as e:
                     st.error(f"❌ Terjadi kesalahan saat memproses data: {e}")
