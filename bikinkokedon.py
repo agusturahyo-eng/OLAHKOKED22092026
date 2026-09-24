@@ -1014,13 +1014,14 @@ with tab9:
                     st.error(f"❌ Terjadi kesalahan saat memproses data: {e}")
 
 # ==========================================
-# TAB 10: SPLIT DATA MENJADI MULTIPLE WORKSHEET
+# TAB 10: SPLIT DATA MENJADI MULTIPLE WORKSHEET / FILES
 # ==========================================
-import re # Pastikan library regex diimport untuk membersihkan nama sheet
+import re
+import zipfile
 
 with tab10:
-    st.header("Tahap 10: Split Data ke Beberapa Worksheet")
-    st.write("Membagi satu tabel data menjadi beberapa worksheet (sheet) Excel berdasarkan nilai pada kolom tertentu (Misal: per IDPEL atau per Petugas).")
+    st.header("Tahap 10: Split Data ke Beberapa Worksheet atau File")
+    st.write("Membagi satu tabel data menjadi beberapa worksheet (sheet) atau file Excel terpisah berdasarkan nilai pada kolom tertentu.")
     st.markdown("---")
 
     file_t10 = st.file_uploader("Upload File Excel yang ingin di-split", type=['xlsx', 'xls'], key="t10_file")
@@ -1032,55 +1033,85 @@ with tab10:
             st.dataframe(df_t10.head(), use_container_width=True)
 
             st.markdown("### Pengaturan Split Data")
+            
             # 1. Pilih kolom sebagai acuan
             kolom_pilihan = st.selectbox("Split berdasarkan kolom (Specific column):", df_t10.columns.tolist())
 
-            # 2. Opsi Prefix & Suffix untuk nama sheet baru
+            # 2. Opsi Prefix & Suffix untuk penamaan
             col1, col2 = st.columns(2)
             with col1:
-                prefix = st.text_input("Prefix (opsional):", help="Tambahan teks di depan nama sheet")
+                prefix = st.text_input("Prefix (opsional):", help="Tambahan teks di depan nama sheet/file")
             with col2:
                 suffix = st.text_input("Suffix (opsional):", help="Misal: Nik Padan")
 
+            # 3. Pilihan Output (Sheet vs File ZIP)
+            mode_split = st.radio(
+                "Pilih Mode Output:", 
+                ["Multiple Sheets (1 File Excel)", "Multiple Files (Download sebagai ZIP)"],
+                help="Pilih apakah ingin hasil split berada dalam 1 file beda sheet, atau file yang benar-benar terpisah."
+            )
+
             if st.button("Proses Split Data", type="primary"):
-                with st.spinner("Sedang membagi data ke beberapa sheet..."):
+                with st.spinner("Sedang membagi data..."):
                     
-                    output_t10 = io.BytesIO()
-                    with pd.ExcelWriter(output_t10, engine='openpyxl') as writer:
-                        # Mengambil nilai unik dari kolom yang dipilih (abaikan yang kosong/NaN)
-                        nilai_unik = df_t10[kolom_pilihan].dropna().unique()
+                    # Mengambil nilai unik dari kolom yang dipilih (abaikan yang kosong/NaN)
+                    nilai_unik = df_t10[kolom_pilihan].dropna().unique()
 
-                        for nilai in nilai_unik:
-                            # Filter data berdasarkan nilai saat ini
-                            df_filtered = df_t10[df_t10[kolom_pilihan] == nilai]
+                    if mode_split == "Multiple Sheets (1 File Excel)":
+                        output_t10 = io.BytesIO()
+                        with pd.ExcelWriter(output_t10, engine='openpyxl') as writer:
+                            for nilai in nilai_unik:
+                                df_filtered = df_t10[df_t10[kolom_pilihan] == nilai]
 
-                            # Pembuatan nama sheet
-                            nilai_str = str(nilai).strip()
-                            # Susun nama sheet dari Prefix + Nilai + Suffix
-                            sheet_name = f"{prefix} {nilai_str} {suffix}".strip()
-                            
-                            # Excel tidak mengizinkan karakter tertentu pada nama sheet dan maksimal 31 karakter
-                            # Hapus karakter terlarang: \ / * ? : [ ]
-                            sheet_name = re.sub(r'[\\/*?:\[\]]', '', sheet_name)
-                            sheet_name = sheet_name[:31] # Potong jika lebih dari 31 karakter
+                                # Pembuatan nama sheet
+                                nilai_str = str(nilai).strip()
+                                nama_custom = f"{prefix} {nilai_str} {suffix}".strip()
+                                
+                                # Bersihkan karakter terlarang untuk Excel
+                                nama_bersih = re.sub(r'[\\/*?:\[\]]', '', nama_custom)[:31]
+                                if not nama_bersih: nama_bersih = "Data"
 
-                            if not sheet_name:
-                                sheet_name = "Data"
+                                df_filtered.to_excel(writer, index=False, sheet_name=nama_bersih)
 
-                            # Simpan ke sheet tersendiri
-                            df_filtered.to_excel(writer, index=False, sheet_name=sheet_name)
+                        st.success(f"✅ Data berhasil dipisah menjadi {len(nilai_unik)} sheet dalam 1 file Excel!")
+                        st.download_button(
+                            label="⬇️ Download Excel (Multiple Sheets)",
+                            data=output_t10.getvalue(),
+                            file_name=f"Data_Split_{kolom_pilihan}_Sheets.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            key="t10_download_sheets"
+                        )
 
-                    hasil_excel_t10 = output_t10.getvalue()
-                    
-                    st.success(f"✅ Data berhasil dipisah menjadi {len(nilai_unik)} sheet yang berbeda!")
-                    
-                    st.download_button(
-                        label="⬇️ Download Hasil Split Excel",
-                        data=hasil_excel_t10,
-                        file_name=f"Data_Split_Berdasarkan_{kolom_pilihan}.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        key="t10_download"
-                    )
+                    else:
+                        # Mode: Multiple Files via ZIP
+                        zip_buffer = io.BytesIO()
+                        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+                            for nilai in nilai_unik:
+                                df_filtered = df_t10[df_t10[kolom_pilihan] == nilai]
+                                
+                                # Pembuatan nama file
+                                nilai_str = str(nilai).strip()
+                                nama_custom = f"{prefix} {nilai_str} {suffix}".strip()
+                                nama_bersih = re.sub(r'[\\/*?:\[\]<>|"]', '', nama_custom)
+                                if not nama_bersih: nama_bersih = "Data"
+                                nama_file = f"{nama_bersih}.xlsx"
+
+                                # Bikin file excel di memory untuk file spesifik ini
+                                excel_buffer = io.BytesIO()
+                                with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
+                                    df_filtered.to_excel(writer, index=False, sheet_name="Data")
+                                
+                                # Simpan file excel ke dalam ZIP
+                                zip_file.writestr(nama_file, excel_buffer.getvalue())
+
+                        st.success(f"✅ Data berhasil dipisah menjadi {len(nilai_unik)} file Excel terpisah!")
+                        st.download_button(
+                            label="⬇️ Download ZIP (Multiple Files)",
+                            data=zip_buffer.getvalue(),
+                            file_name=f"Data_Split_{kolom_pilihan}_Files.zip",
+                            mime="application/zip",
+                            key="t10_download_zip"
+                        )
 
         except Exception as e:
-            st.error(f"❌ Terjadi kesalahan saat membaca atau memproses file: {e}")
+            st.error(f"❌ Terjadi kesalahan saat memproses data: {e}")
