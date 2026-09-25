@@ -750,7 +750,7 @@ with tab7:
         with st.form(key="form_pencarian_supabase"):
             kategori = st.selectbox("🎯 Pilih Dasar Pencarian:", ["IDPEL", "NAMA", "NOMOR METER", "SEMUA KOLOM"])
             kata_kunci = st.text_input("🔍 Masukkan Kata Kunci:")
-            tombol_cari = st.form_submit_button("⚡ Cari Data Sekarang (Super Cepat)", type="primary", use_container_width=True)
+            tombol_cari = st.form_submit_button("⚡ Cari Data ", type="primary", use_container_width=True)
             
         if tombol_cari and kata_kunci:
             kunci_bersih = str(kata_kunci).strip()
