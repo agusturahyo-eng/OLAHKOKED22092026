@@ -735,7 +735,7 @@ with tab7:
     # 1. SETUP KONEKSI SUPABASE
     # Ganti dengan URL dan API Key milik Anda!
     SUPABASE_URL = "https://csjnbvpshpbhdqsbudfo.supabase.co" 
-    SUPABASE_KEY = "https://sb_publishable_WyobfDIXo2ov1eEsH6T45g_jP_1pq2g"
+    SUPABASE_KEY = "sb_publishable_WyobfDIXo2ov1eEsH6T45g_jP_1pq2g"
     
     # Menyiapkan koneksi ke database (menggunakan cache_resource agar koneksi stabil)
     @st.cache_resource
