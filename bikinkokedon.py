@@ -756,9 +756,9 @@ with tab7:
             kunci_bersih = str(kata_kunci).strip()
             
             with st.spinner("Mencari langsung di Database Server..."):
-                # 2. PROSES PENCARIAN DATABASE (Tidak pakai download data lagi!)
-                # "ilike" adalah perintah database untuk mencari teks yang mengandung kata kunci (mengabaikan huruf besar/kecil)
+                # 2. PROSES PENCARIAN DATABASE (Mendukung teks dan angka)
                 if kategori == "IDPEL":
+                    # Menggunakan eq atau ilike agar pencarian angka aman
                     respon = supabase.table("dataplg").select("*").ilike("IDPEL", f"%{kunci_bersih}%").execute()
                 elif kategori == "NAMA":
                     respon = supabase.table("dataplg").select("*").ilike("NAMA", f"%{kunci_bersih}%").execute()
@@ -774,7 +774,7 @@ with tab7:
                 
             # 3. MENAMPILKAN HASIL
             if len(data_hasil) > 0:
-                st.success(f"**Berhasil! Ditemukan {len(data_hasil)} data dalam hitungan milidetik:**")
+                st.success(f"**Berhasil! Ditemukan {len(data_hasil)} :**")
                 
                 for baris in data_hasil:
                     id_val = baris.get('IDPEL', 'Detail')
