@@ -727,104 +727,101 @@ with tab6:
                     st.error(f"❌ Terjadi kesalahan: {str(e)}")
                     
 # ==========================================
-# TAB 7: INFO DATA & LOKASI (GOOGLE SHEETS)
+# TAB 7: INFO DATA & LOKASI (SUPABASE DATABASE)
 # ==========================================
 with tab7:
     st.header("Tahap 7: Info Data & Lokasi Pelanggan")
     
-    url_g_sheet = "https://docs.google.com/spreadsheets/d/1Po-6B5KvYY0uGBnqeVSocifwe6FBnDvecpf2a_JzvN0/edit?usp=sharing"
+    # 1. SETUP KONEKSI SUPABASE
+    # Ganti dengan URL dan API Key milik Anda!
+    SUPABASE_URL = "https://csjnbvpshpbhdqsbudfo.supabase.co" 
+    SUPABASE_KEY = "https://csjnbvpshpbhdqsbudfo.supabase.co/rest/v1/dataplg"
     
-    @st.cache_data(ttl=600) # Cache disimpan 10 menit
-    def ambil_data_terbaru():
-        import re
-        url_csv = re.sub(r'/edit.*', '/export?format=csv', url_g_sheet)
-        df = pd.read_csv(url_csv, dtype=str)
-        df = df.fillna('')
-        return df
-    
-    # --- TOMBOL REFRESH DATA BARU ---
-    kolom_kiri, kolom_kanan = st.columns([7, 3])
-    with kolom_kanan:
-        if st.button("🔄 Perbarui Data dari Sheet", use_container_width=True):
-            st.cache_data.clear() # Perintah membersihkan memori lama
-            st.rerun() # Memuat ulang aplikasi
-    # --------------------------------
+    # Menyiapkan koneksi ke database (menggunakan cache_resource agar koneksi stabil)
+    @st.cache_resource
+    def init_koneksi():
+        from supabase import create_client
+        return create_client(SUPABASE_URL, SUPABASE_KEY)
     
     try:
-        with st.spinner("Mengambil database terbaru..."):
-            tabel_utama = ambil_data_terbaru()
-            
-        with st.form(key="form_pencarian_reset"):
+        # Menghubungkan ke server Singapura
+        supabase = init_koneksi()
+        
+        with st.form(key="form_pencarian_supabase"):
             kategori = st.selectbox("🎯 Pilih Dasar Pencarian:", ["IDPEL", "NAMA", "NOMOR METER", "SEMUA KOLOM"])
             kata_kunci = st.text_input("🔍 Masukkan Kata Kunci:")
-            tombol_cari = st.form_submit_button("🔍 Cari Data Sekarang", type="primary", use_container_width=True)
-        
+            tombol_cari = st.form_submit_button("⚡ Cari Data Sekarang (Super Cepat)", type="primary", use_container_width=True)
+            
         if tombol_cari and kata_kunci:
-            kunci_bersih = str(kata_kunci).strip().lower()
-            kolom_semua = list(tabel_utama.columns)
+            kunci_bersih = str(kata_kunci).strip()
             
-            if kategori == "IDPEL":
-                kolom_pencarian = [k for k in kolom_semua if "ID" in str(k).upper()]
-            elif kategori == "NAMA":
-                kolom_pencarian = [k for k in kolom_semua if "NAMA" in str(k).upper()]
-            elif kategori == "NOMOR METER":
-                kolom_pencarian = [k for k in kolom_semua if "METER" in str(k).upper() or "NO" in str(k).upper()]
-            else:
-                kolom_pencarian = kolom_semua
-            
-            if not kolom_pencarian:
-                kolom_pencarian = kolom_semua
-
-            hasil_pencarian = []
-            for index, baris in tabel_utama.iterrows():
-                cocok = False
-                for k in kolom_pencarian:
-                    isi_sel = str(baris[k]).lower()
-                    if kunci_bersih in isi_sel:
-                        cocok = True
-                        break
-                if cocok:
-                    hasil_pencarian.append(baris)
-            
-            if len(hasil_pencarian) > 0:
-                st.success(f"**Ditemukan {len(hasil_pencarian)} data:**")
+            with st.spinner("Mencari langsung di Database Server..."):
+                # 2. PROSES PENCARIAN DATABASE (Tidak pakai download data lagi!)
+                # "ilike" adalah perintah database untuk mencari teks yang mengandung kata kunci (mengabaikan huruf besar/kecil)
+                if kategori == "IDPEL":
+                    respon = supabase.table("data_pelanggan").select("*").ilike("IDPEL", f"%{kunci_bersih}%").execute()
+                elif kategori == "NAMA":
+                    respon = supabase.table("data_pelanggan").select("*").ilike("NAMA", f"%{kunci_bersih}%").execute()
+                elif kategori == "NOMOR METER":
+                    respon = supabase.table("data_pelanggan").select("*").ilike("NOMORKWH", f"%{kunci_bersih}%").execute()
+                else: 
+                    # Pencarian Multi-kolom
+                    kondisi_or = f"IDPEL.ilike.%{kunci_bersih}%,NAMA.ilike.%{kunci_bersih}%,ALAMAT.ilike.%{kunci_bersih}%,NOMORKWH.ilike.%{kunci_bersih}%"
+                    respon = supabase.table("data_pelanggan").select("*").or_(kondisi_or).execute()
                 
-                for row in hasil_pencarian:
-                    kolom_id = next((c for c in kolom_semua if 'ID' in str(c).upper()), kolom_semua[0])
-                    kolom_nama = next((c for c in kolom_semua if 'NAMA' in str(c).upper()), None)
+                # Hasil jawaban dari server langsung dalam bentuk list
+                data_hasil = respon.data 
+                
+            # 3. MENAMPILKAN HASIL
+            if len(data_hasil) > 0:
+                st.success(f"**Berhasil! Ditemukan {len(data_hasil)} data dalam hitungan milidetik:**")
+                
+                for baris in data_hasil:
+                    id_val = baris.get('IDPEL', 'Detail')
+                    nama_val = baris.get('NAMA', '')
                     
-                    teks_judul = f"👤 {row[kolom_id]}"
-                    if kolom_nama and str(row[kolom_nama]).strip() != '':
-                        teks_judul += f" - {row[kolom_nama]}"
+                    teks_judul = f"👤 {id_val}"
+                    if str(nama_val).strip() != '':
+                        teks_judul += f" - {nama_val}"
                         
                     with st.expander(teks_judul):
-                        for col in kolom_semua:
-                            st.write(f"**{col}:** {row[col]}")
+                        # Menampilkan semua data secara otomatis
+                        for nama_kolom, isi_kolom in baris.items():
+                            # Hanya tampilkan jika datanya tidak kosong
+                            if isi_kolom is not None and str(isi_kolom).strip() != "":
+                                st.write(f"**{nama_kolom}:** {isi_kolom}")
                         
+                        # Deteksi Titik Kordinat (Sesuai nama kolom di gambar Anda: KOORDINAT X & KOORDINAT Y)
                         lat_val, lon_val = None, None
-                        for col in kolom_semua:
-                            val_str = str(row[col]).strip().replace(',', '.')
-                            try:
-                                num_val = float(val_str)
-                                if -11.0 <= num_val <= 6.0 and lat_val is None:
-                                    lat_val = str(num_val)
-                                elif 95.0 <= num_val <= 141.0 and lon_val is None:
-                                    lon_val = str(num_val)
-                            except ValueError:
-                                pass
+                        kx = baris.get("KOORDINAT X", "")
+                        ky = baris.get("KOORDINAT Y", "")
                         
+                        try:
+                            if kx and ky:
+                                num_x = float(str(kx).replace(',', '.'))
+                                num_y = float(str(ky).replace(',', '.'))
+                                
+                                # Cek Lintang (Latitude di Indonesia biasanya minus, bujur/Longitude ratusan)
+                                if -11.0 <= num_x <= 6.0:
+                                    lat_val, lon_val = str(num_x), str(num_y)
+                                elif -11.0 <= num_y <= 6.0:
+                                    lat_val, lon_val = str(num_y), str(num_x)
+                        except (ValueError, TypeError):
+                            pass
+                            
                         st.markdown("---")
                         if lat_val and lon_val:
                             url_map = f"https://www.google.com/maps/search/?api=1&query={lat_val},{lon_val}"
                             st.link_button("📍 Buka Lokasi di Google Maps", url_map, type="primary", use_container_width=True)
                         else:
-                            st.warning("⚠️ Data koordinat lokasi tidak ditemukan atau formatnya bukan angka.")
+                            st.warning("⚠️ Data koordinat lokasi tidak ditemukan atau format tidak sesuai.")
             else:
-                st.error("❌ Data tidak ditemukan. Cek kembali kata kuncinya.")
+                st.error("❌ Data tidak ditemukan di Database. Cek kembali penulisan kata kunci.")
                 
     except Exception as e:
-        st.error(f"Gagal memuat database. Error: {str(e)}")
-
+        st.error(f"Gagal menghubungkan ke database: {str(e)}")
+        st.info("Pastikan Anda sudah menginstall library di terminal: `pip install supabase` dan API Key/URL sudah benar.")
+        
 # ==========================================
 # TAB 8: UPDATE MASTER DATA (VERSI 2)
 # ==========================================
