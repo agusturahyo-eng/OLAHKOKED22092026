@@ -734,8 +734,8 @@ with tab7:
     
     # 1. SETUP KONEKSI SUPABASE
     # Ganti dengan URL dan API Key milik Anda!
-    SUPABASE_URL = "https://csjnbvpshpbhdqsbudfo.supabase.co" 
-    SUPABASE_KEY = "sb_publishable_WyobfDIXo2ov1eEsH6T45g_jP_1pq2g"
+    SUPABASE_URL = "https://wnzedfyiublmzmjkzsrq.supabase.co" 
+    SUPABASE_KEY = "sb_publishable_g1WlECVLkTdNBMwL2QxWlA_gOu6l4VR"
     
     # Menyiapkan koneksi ke database (menggunakan cache_resource agar koneksi stabil)
     @st.cache_resource
@@ -759,15 +759,15 @@ with tab7:
                 # 2. PROSES PENCARIAN DATABASE (Mendukung teks dan angka)
                 if kategori == "IDPEL":
                     # Menggunakan eq atau ilike agar pencarian angka aman
-                    respon = supabase.table("dataplg").select("*").ilike("IDPEL", f"%{kunci_bersih}%").execute()
+                    respon = supabase.table("dataplg3").select("*").ilike("IDPEL", f"%{kunci_bersih}%").execute()
                 elif kategori == "NAMA":
-                    respon = supabase.table("dataplg").select("*").ilike("NAMA", f"%{kunci_bersih}%").execute()
+                    respon = supabase.table("dataplg3").select("*").ilike("NAMA", f"%{kunci_bersih}%").execute()
                 elif kategori == "NOMOR METER":
-                    respon = supabase.table("dataplg").select("*").ilike("NOMORKWH", f"%{kunci_bersih}%").execute()
+                    respon = supabase.table("dataplg3").select("*").ilike("NOMORKWH", f"%{kunci_bersih}%").execute()
                 else: 
                     # Pencarian Multi-kolom
                     kondisi_or = f"IDPEL.ilike.%{kunci_bersih}%,NAMA.ilike.%{kunci_bersih}%,ALAMAT.ilike.%{kunci_bersih}%,NOMORKWH.ilike.%{kunci_bersih}%"
-                    respon = supabase.table("dataplg").select("*").or_(kondisi_or).execute()
+                    respon = supabase.table("dataplg3").select("*").or_(kondisi_or).execute()
                 
                 # Hasil jawaban dari server langsung dalam bentuk list
                 data_hasil = respon.data 
