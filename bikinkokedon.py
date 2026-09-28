@@ -8,7 +8,6 @@ import zipfile
 import tempfile
 import re
 import gc # Untuk garbage collection
-import openpyxl # Tambahan untuk tab 8, 9, 10
 
 # Library PDF
 try:
@@ -42,90 +41,32 @@ def clean_idpel(val):
         return digits[:12]
     return digits
 
-# --- FUNGSI UN-MASKING (PRIORITAS DATA PB DULU -> DATA MASTER) ---
-def fix_masked_info(df_target, df_master, df_sup_pb):
-    if df_target.empty:
-        return df_target
-    
-    df_res = df_target.copy()
+# --- FUNGSI UN-MASKING (NAMA/ALAMAT BINTANG) ---
+def fix_masked_info(df_baru, df_master, df_sup_pb):
+    if df_baru.empty: return df_baru
+    df_baru = df_baru.reset_index(drop=True)
+    nama_map, alamat_map = {}, {}
 
-    # Helper untuk mendeteksi teks berbintang atau kosong
-    def is_masked(series):
-        s = series.astype(str).str.strip()
-        return s.str.contains(r'\*', na=False) | s.isna() | (s == '') | (s.str.lower() == 'nan') | (s.str.lower() == 'none')
-
-    # Pemetaan dari Data PB (Prioritas 1)
-    pb_nama_map, pb_alamat_map = {}, {}
     if not df_sup_pb.empty:
-        pb_clean = df_sup_pb.drop_duplicates(subset=['IDPEL'], keep='first')
-        pb_nama_map = pb_clean[~is_masked(pb_clean['NAMA'])].set_index('IDPEL')['NAMA'].to_dict()
-        pb_alamat_map = pb_clean[~is_masked(pb_clean['ALAMAT'])].set_index('IDPEL')['ALAMAT'].to_dict()
+        sup_clean = df_sup_pb.drop_duplicates(subset=['IDPEL'], keep='first')
+        sup_clean = sup_clean[sup_clean['NAMA'].astype(str).str.strip().ne('') & ~sup_clean['NAMA'].astype(str).str.contains(r'\*', na=False)]
+        nama_map.update(sup_clean.set_index('IDPEL')['NAMA'].to_dict())
+        alamat_map.update(sup_clean.set_index('IDPEL')['ALAMAT'].to_dict())
 
-    # Pemetaan dari Data Master (Prioritas 2)
-    master_nama_map, master_alamat_map = {}, {}
     if not df_master.empty:
-        m_clean = df_master.drop_duplicates(subset=['IDPEL'], keep='first')
-        master_nama_map = m_clean[~is_masked(m_clean['NAMA'])].set_index('IDPEL')['NAMA'].to_dict()
-        master_alamat_map = m_clean[~is_masked(m_clean['ALAMAT'])].set_index('IDPEL')['ALAMAT'].to_dict()
+        master_clean = df_master.drop_duplicates(subset=['IDPEL'], keep='first')
+        master_clean = master_clean[master_clean['NAMA'].astype(str).str.strip().ne('') & ~master_clean['NAMA'].astype(str).str.contains(r'\*', na=False)]
+        nama_map.update(master_clean.set_index('IDPEL')['NAMA'].to_dict())
+        alamat_map.update(master_clean.set_index('IDPEL')['ALAMAT'].to_dict())
 
-    # Langkah A: Ambil dari Data PB jika NAMA/ALAMAT Data Baru berbintang
-    mask_nama = is_masked(df_res['NAMA'])
-    mask_alamat = is_masked(df_res['ALAMAT'])
+    if not nama_map and not alamat_map: return df_baru
 
-    if pb_nama_map:
-        df_res.loc[mask_nama, 'NAMA'] = df_res.loc[mask_nama, 'IDPEL'].map(pb_nama_map).fillna(df_res.loc[mask_nama, 'NAMA'])
-    if pb_alamat_map:
-        df_res.loc[mask_alamat, 'ALAMAT'] = df_res.loc[mask_alamat, 'IDPEL'].map(pb_alamat_map).fillna(df_res.loc[mask_alamat, 'ALAMAT'])
+    is_masked_nama = df_baru['NAMA'].astype(str).str.contains(r'\*', na=False) | df_baru['NAMA'].isna() | (df_baru['NAMA'].astype(str).str.strip() == '')
+    is_masked_alamat = df_baru['ALAMAT'].astype(str).str.contains(r'\*', na=False) | df_baru['ALAMAT'].isna() | (df_baru['ALAMAT'].astype(str).str.strip() == '')
 
-    # Langkah B: Jika masih berbintang setelah dicek ke PB, ambil dari Data Master
-    mask_nama_still = is_masked(df_res['NAMA'])
-    mask_alamat_still = is_masked(df_res['ALAMAT'])
-
-    if master_nama_map:
-        df_res.loc[mask_nama_still, 'NAMA'] = df_res.loc[mask_nama_still, 'IDPEL'].map(master_nama_map).fillna(df_res.loc[mask_nama_still, 'NAMA'])
-    if master_alamat_map:
-        df_res.loc[mask_alamat_still, 'ALAMAT'] = df_res.loc[mask_alamat_still, 'IDPEL'].map(master_alamat_map).fillna(df_res.loc[mask_alamat_still, 'ALAMAT'])
-
-    return df_res
-
-# --- FUNGSI UPDATE DATA MASTER ---
-def update_master_data(df_master, df_baru, df_sup_pb):
-    if df_baru.empty:
-        return df_master
-
-    if df_master.empty:
-        df_m = df_baru.copy()
-    else:
-        df_m = df_master.copy()
-
-    cols = ['IDPEL', 'NAMA', 'ALAMAT', 'KOKED', 'TARIP', 'DAYA']
-    for c in cols:
-        if c not in df_m.columns: df_m[c] = ""
-        if c not in df_baru.columns: df_baru[c] = ""
-
-    df_m = df_m.drop_duplicates(subset=['IDPEL'], keep='first').set_index('IDPEL')
-    df_b = df_baru.drop_duplicates(subset=['IDPEL'], keep='first').set_index('IDPEL')
-
-    for idpel, row_baru in df_b.iterrows():
-        if idpel in df_m.index:
-            # Jika IDPEL sudah ada -> Update HANYA jika ada perubahan dan data baru TIDAK berbintang
-            for col in ['NAMA', 'ALAMAT', 'KOKED', 'TARIP', 'DAYA']:
-                val_baru = str(row_baru[col]).strip() if pd.notna(row_baru[col]) else ""
-                if val_baru and '*' not in val_baru and val_baru.lower() not in ['nan', 'none']:
-                    val_master = str(df_m.loc[idpel, col]).strip() if pd.notna(df_m.loc[idpel, col]) else ""
-                    if val_baru != val_master:
-                        df_m.loc[idpel, col] = row_baru[col]
-        else:
-            # Jika IDPEL baru -> Masukkan ke Master walaupun data berbintang
-            df_m.loc[idpel] = [row_baru.get(c, "") for c in df_m.columns]
-
-    df_m = df_m.reset_index()
-
-    # Lengkapi lagi data NAMA dan ALAMAT di Master menggunakan Data PB jika masih ada yang berbintang
-    if not df_sup_pb.empty:
-        df_m = fix_masked_info(df_m, pd.DataFrame(), df_sup_pb)
-
-    return df_m
+    df_baru.loc[is_masked_nama, 'NAMA'] = df_baru.loc[is_masked_nama, 'IDPEL'].map(nama_map).fillna(df_baru.loc[is_masked_nama, 'NAMA'])
+    df_baru.loc[is_masked_alamat, 'ALAMAT'] = df_baru.loc[is_masked_alamat, 'IDPEL'].map(alamat_map).fillna(df_baru.loc[is_masked_alamat, 'ALAMAT'])
+    return df_baru
 
 # --- LOGIKA EKSTRAKSI TABEL PDF TIPE 1 (HYBRID) ---
 def get_pdf_tables_tipe1(page):
@@ -198,6 +139,7 @@ def process_standard_table(table):
         val = str(h).strip() if str(h).strip() != "" else f"KOLOM_{i+1}"
         headers.append(val)
         
+    # --- ANTI-ERROR REINDEXING: Memastikan tidak ada nama kolom yang duplikat ---
     seen = set()
     unique_headers = []
     for h in headers:
@@ -212,7 +154,7 @@ def process_standard_table(table):
     df = pd.DataFrame(cleaned_table[header_index+1:], columns=unique_headers)
     return df
 
-# --- FUNGSI NORMALISASI ---
+# --- FUNGSI NORMALISASI (HANYA DIGUNAKAN DI TAB 3) ---
 def find_target_column(col_name):
     col_clean = re.sub(r'[^A-Z0-9]', '', str(col_name).upper())
     
@@ -282,7 +224,7 @@ def normalize_pdf_dataframe(df):
 
     return df[target_cols].reset_index(drop=True)
 
-# --- FUNGSI PEMBACA FILE UMUM ---
+# --- FUNGSI PEMBACA FILE UMUM TAHAP 1 & 2 ---
 def baca_ekstrak_tabel(uploaded_file):
     ext = os.path.splitext(uploaded_file.name)[1].lower()
     fname = uploaded_file.name
@@ -376,10 +318,10 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10 = st.tabs([
 ])
 
 # ==========================================
-# TAB 1: PERSIAPAN DATA & UPDATE MASTER
+# TAB 1: PERSIAPAN DATA
 # ==========================================
 with tab1:
-    st.header("Tahap 1: Memecah Data Untuk Petugas Lapangan & Update Master")
+    st.header("Tahap 1: Memecah Data Untuk Petugas Lapangan")
     col1, col2 = st.columns(2)
     with col1:
         files_baru = st.file_uploader("[Tahap 1] Data Server Bulan INI", accept_multiple_files=True, key="t1_baru")
@@ -389,70 +331,44 @@ with tab1:
         files_suppb = st.file_uploader("[Tahap 1] Data PB Baru", accept_multiple_files=True, key="t1_suppb")
 
     if st.button("Proses Tahap 1", type="primary"):
-        if not files_baru or not files_lama: 
-            st.error("Silakan unggah Data Bulan Ini dan Data Bulan Lalu.")
+        if not files_baru or not files_lama: st.error("Silakan unggah Data Bulan Ini dan Data Bulan Lalu.")
         else:
-            with st.spinner("Menyiapkan data untuk petugas & memperbarui data master..."):
+            with st.spinner("Menyiapkan data untuk petugas..."):
                 try:
                     df_baru = proses_list_file(files_baru, 'baru')
                     df_lama = proses_list_file(files_lama, 'lama')
                     df_master = proses_list_file(files_master, 'master') if files_master else pd.DataFrame()
                     df_sup_pb = proses_list_file(files_suppb, 'sup_pb') if files_suppb else pd.DataFrame()
 
-                    # 1. Isian Data Baru dibersihkan dari Bintang (Prioritas: Data PB -> Data Master)
-                    df_baru_clean = fix_masked_info(df_baru, df_master, df_sup_pb)
-                    df_baru_clean = df_baru_clean[(df_baru_clean['DAYA'] <= 33000) & (df_baru_clean['IDPEL'] != '524050450911')].copy()
+                    df_baru = fix_masked_info(df_baru, df_master, df_sup_pb)
+                    df_baru = df_baru[(df_baru['DAYA'] <= 33000) & (df_baru['IDPEL'] != '524050450911')].copy()
                     
                     list_idpel_lama = set(df_lama['IDPEL'].tolist())
-
-                    # 2. Data Pelanggan Baru (PB) Keseluruhan
-                    df_pb = df_baru_clean[~df_baru_clean['IDPEL'].isin(list_idpel_lama)].copy()
-
-                    # 3. Data Pelanggan Lama (Tetap)
-                    # Isian data berdasar Data Baru, tetapi pembagian petugas berdasar KOKED Lama
-                    df_lama_koked = df_lama.drop_duplicates(subset=['IDPEL'], keep='first')[['IDPEL', 'KOKED']].rename(columns={'KOKED': 'KOKED_LAMA'})
-                    df_tetap = df_baru_clean[df_baru_clean['IDPEL'].isin(list_idpel_lama)].copy()
-                    df_tetap = df_tetap.merge(df_lama_koked, on='IDPEL', how='left')
-
-                    # 4. Update Pelanggan Master dari Data Baru & PB
-                    df_master_updated = update_master_data(df_master, df_baru, df_sup_pb)
-
-                    mapping = {
-                        'C01': 'JCA', 'C02': 'TAA', 'C03': 'JCB', 'C04': 'JCC', 'C05': 'NCD',
-                        'C06': 'KBA', 'C07': 'TAB', 'C08': 'JCE', 'C09': 'TAC', 'C10': 'MBB',
-                        'C11': 'KAD', 'C12': 'TAE', 'C13': 'KCF', 'C14': 'JCG', 'C15': 'TAF',
-                        'C16': 'KAG', 'C17': 'BBC', 'C18': 'TAH', 'C19': 'BCK', 'C20': 'NCH',
-                        'C21': 'JBE', 'C22': 'MBF', 'C23': 'MBG', 'C24': 'KBH', 'C25': 'KBI',
-                        'C26': ['KAI', 'TAI'], 'C27': 'MCI', 'C28': ['KBJ', 'NBJ'], 
-                        'C29': ['JCJ', 'KCJ'], 'C30': 'TAJ', 'C31': 'MBK', 'C32': 'KBL',
-                        'C33': 'TAK', 'C34': 'KAL', 'C35': 'JCL', 'C36': 'MBD'
-                    }
+                    df_pb = df_baru[~df_baru['IDPEL'].isin(list_idpel_lama)].copy()
+                    df_tetap = df_baru[df_baru['IDPEL'].isin(list_idpel_lama)].copy()
 
                     zip_buffer = io.BytesIO()
                     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
-                        # Poin 2: Data Pelanggan Baru Keseluruhan
-                        if not df_pb.empty: 
-                            zip_file.writestr("PB_SEMUA_PETUGAS.xlsx", to_excel_bytes(df_pb[['IDPEL', 'KOKED', 'NAMA', 'ALAMAT', 'TARIP', 'DAYA']]))
-                        
-                        # Poin 4: Hasil Update Data Master
-                        if not df_master_updated.empty:
-                            zip_file.writestr("MASTER_UPDATED.xlsx", to_excel_bytes(df_master_updated))
-
-                        # Poin 3: Pembagian Per-Petugas dari Data PB (Berdasarkan KOKED Baru)
-                        for nama_file, kriteria in mapping.items():
-                            temp_pb = df_pb[df_pb['KOKED'].astype(str).str[3:6].isin(kriteria)] if isinstance(kriteria, list) else df_pb[df_pb['KOKED'].astype(str).str[3:6] == kriteria]
-                            if not temp_pb.empty:
-                                zip_file.writestr(f"PB_{nama_file}.xlsx", to_excel_bytes(temp_pb.drop_duplicates(subset=['IDPEL'])[['IDPEL', 'KOKED', 'NAMA', 'ALAMAT', 'TARIP', 'DAYA']]))
-
-                        # Poin 1: Pembagian Per-Petugas Pelanggan Lama (Berdasarkan KOKED Lama, Isian Data Baru)
-                        for nama_file, kriteria in mapping.items():
-                            temp_tetap = df_tetap[df_tetap['KOKED_LAMA'].astype(str).str[3:6].isin(kriteria)] if isinstance(kriteria, list) else df_tetap[df_tetap['KOKED_LAMA'].astype(str).str[3:6] == kriteria]
-                            if not temp_tetap.empty:
-                                zip_file.writestr(f"{nama_file}.xlsx", to_excel_bytes(temp_tetap.drop_duplicates(subset=['IDPEL'])[['IDPEL', 'KOKED', 'NAMA', 'ALAMAT', 'TARIP', 'DAYA']]))
-
-                    st.success("✅ Proses Tahap 1 Selesai! Hasil file ZIP sudah disesuaikan dengan aturan terbaru.")
-                    st.download_button("📥 Download Hasil Tahap 1 (.zip)", data=zip_buffer.getvalue(), file_name="Hasil_Tahap1_Lengkap.zip", mime="application/zip", type="primary")
-
+                        if not df_pb.empty: zip_file.writestr("PB_SEMUA_PETUGAS.xlsx", to_excel_bytes(df_pb[['IDPEL', 'KOKED', 'NAMA', 'ALAMAT', 'TARIP', 'DAYA']]))
+                        mapping = {
+                            'C01': 'JCA', 'C02': 'TAA', 'C03': 'JCB', 'C04': 'JCC', 'C05': 'NCD',
+                            'C06': 'KBA', 'C07': 'TAB', 'C08': 'JCE', 'C09': 'TAC', 'C10': 'MBB',
+                            'C11': 'KAD', 'C12': 'TAE', 'C13': 'KCF', 'C14': 'JCG', 'C15': 'TAF',
+                            'C16': 'KAG', 'C17': 'BBC', 'C18': 'TAH', 'C19': 'BCK', 'C20': 'NCH',
+                            'C21': 'JBE', 'C22': 'MBF', 'C23': 'MBG', 'C24': 'KBH', 'C25': 'KBI',
+                            'C26': ['KAI', 'TAI'], 'C27': 'MCI', 'C28': ['KBJ', 'NBJ'], 
+                            'C29': ['JCJ', 'KCJ'], 'C30': 'TAJ', 'C31': 'MBK', 'C32': 'KBL',
+                            'C33': 'TAK', 'C34': 'KAL', 'C35': 'JCL', 'C36': 'MBD'
+                        }
+                        def add_to_zip(df_source, prefix=""):
+                            if df_source.empty: return
+                            for nama_file, kriteria in mapping.items():
+                                temp_df = df_source[df_source['KOKED'].str[3:6].isin(kriteria)] if isinstance(kriteria, list) else df_source[df_source['KOKED'].str[3:6] == kriteria]
+                                if not temp_df.empty: zip_file.writestr(f"{prefix}{nama_file}.xlsx", to_excel_bytes(temp_df.drop_duplicates(subset=['IDPEL'])[['IDPEL', 'KOKED', 'NAMA', 'ALAMAT', 'TARIP', 'DAYA']]))
+                        add_to_zip(df_pb, "PB_")
+                        add_to_zip(df_tetap, "")
+                    st.success("✅ File untuk petugas berhasil dibuat!")
+                    st.download_button("📥 Download Distribusi (.zip)", data=zip_buffer.getvalue(), file_name="Hasil_PerPetugas.zip", mime="application/zip")
                 except Exception as e:
                     st.error(f"❌ Error Tahap 1: {str(e)}")
 
@@ -811,104 +727,110 @@ with tab6:
                     st.error(f"❌ Terjadi kesalahan: {str(e)}")
                     
 # ==========================================
-# TAB 7: INFO DATA & LOKASI (SUPABASE DATABASE)
+# TAB 7: INFO DATA & LOKASI (GOOGLE SHEETS)
 # ==========================================
 with tab7:
     st.header("Tahap 7: Info Data & Lokasi Pelanggan")
     
-    # 1. SETUP KONEKSI SUPABASE
-    # Ganti dengan URL dan API Key milik Anda!
-    SUPABASE_URL = "https://wnzedfyiublmzmjkzsrq.supabase.co" 
-    SUPABASE_KEY = "sb_publishable_g1WlECVLkTdNBMwL2QxWlA_gOu6l4VR"
+    url_g_sheet = "https://docs.google.com/spreadsheets/d/1Po-6B5KvYY0uGBnqeVSocifwe6FBnDvecpf2a_JzvN0/edit?usp=sharing"
     
-    # Menyiapkan koneksi ke database (menggunakan cache_resource agar koneksi stabil)
-    @st.cache_resource
-    def init_koneksi():
-        from supabase import create_client
-        return create_client(SUPABASE_URL, SUPABASE_KEY)
+    @st.cache_data(ttl=600) # Cache disimpan 10 menit
+    def ambil_data_terbaru():
+        import re
+        url_csv = re.sub(r'/edit.*', '/export?format=csv', url_g_sheet)
+        df = pd.read_csv(url_csv, dtype=str)
+        df = df.fillna('')
+        return df
+    
+    # --- TOMBOL REFRESH DATA BARU ---
+    kolom_kiri, kolom_kanan = st.columns([7, 3])
+    with kolom_kanan:
+        if st.button("🔄 Perbarui Data dari Sheet", use_container_width=True):
+            st.cache_data.clear() # Perintah membersihkan memori lama
+            st.rerun() # Memuat ulang aplikasi
+    # --------------------------------
     
     try:
-        # Menghubungkan ke server Singapura
-        supabase = init_koneksi()
-        
-        with st.form(key="form_pencarian_supabase"):
+        with st.spinner("Mengambil database terbaru..."):
+            tabel_utama = ambil_data_terbaru()
+            
+        with st.form(key="form_pencarian_reset"):
             kategori = st.selectbox("🎯 Pilih Dasar Pencarian:", ["IDPEL", "NAMA", "NOMOR METER", "SEMUA KOLOM"])
             kata_kunci = st.text_input("🔍 Masukkan Kata Kunci:")
-            tombol_cari = st.form_submit_button("⚡ Cari Data ", type="primary", use_container_width=True)
-            
+            tombol_cari = st.form_submit_button("🔍 Cari Data Sekarang", type="primary", use_container_width=True)
+        
         if tombol_cari and kata_kunci:
-            kunci_bersih = str(kata_kunci).strip()
+            kunci_bersih = str(kata_kunci).strip().lower()
+            kolom_semua = list(tabel_utama.columns)
             
-            with st.spinner("Mencari langsung di Database Server..."):
-                # 2. PROSES PENCARIAN DATABASE (Mendukung teks dan angka)
-                if kategori == "IDPEL":
-                    # Menggunakan eq atau ilike agar pencarian angka aman
-                    respon = supabase.table("dataplg3").select("*").ilike("IDPEL", f"%{kunci_bersih}%").execute()
-                elif kategori == "NAMA":
-                    respon = supabase.table("dataplg3").select("*").ilike("NAMA", f"%{kunci_bersih}%").execute()
-                elif kategori == "NOMOR METER":
-                    respon = supabase.table("dataplg3").select("*").ilike("NOMORKWH", f"%{kunci_bersih}%").execute()
-                else: 
-                    # Pencarian Multi-kolom
-                    kondisi_or = f"IDPEL.ilike.%{kunci_bersih}%,NAMA.ilike.%{kunci_bersih}%,ALAMAT.ilike.%{kunci_bersih}%,NOMORKWH.ilike.%{kunci_bersih}%"
-                    respon = supabase.table("dataplg3").select("*").or_(kondisi_or).execute()
+            if kategori == "IDPEL":
+                kolom_pencarian = [k for k in kolom_semua if "ID" in str(k).upper()]
+            elif kategori == "NAMA":
+                kolom_pencarian = [k for k in kolom_semua if "NAMA" in str(k).upper()]
+            elif kategori == "NOMOR METER":
+                kolom_pencarian = [k for k in kolom_semua if "METER" in str(k).upper() or "NO" in str(k).upper()]
+            else:
+                kolom_pencarian = kolom_semua
+            
+            if not kolom_pencarian:
+                kolom_pencarian = kolom_semua
+
+            hasil_pencarian = []
+            for index, baris in tabel_utama.iterrows():
+                cocok = False
+                for k in kolom_pencarian:
+                    isi_sel = str(baris[k]).lower()
+                    if kunci_bersih in isi_sel:
+                        cocok = True
+                        break
+                if cocok:
+                    hasil_pencarian.append(baris)
+            
+            if len(hasil_pencarian) > 0:
+                st.success(f"**Ditemukan {len(hasil_pencarian)} data:**")
                 
-                # Hasil jawaban dari server langsung dalam bentuk list
-                data_hasil = respon.data 
-                
-            # 3. MENAMPILKAN HASIL
-            if len(data_hasil) > 0:
-                st.success(f"**Berhasil! Ditemukan {len(data_hasil)} :**")
-                
-                for baris in data_hasil:
-                    id_val = baris.get('IDPEL', 'Detail')
-                    nama_val = baris.get('NAMA', '')
+                for row in hasil_pencarian:
+                    kolom_id = next((c for c in kolom_semua if 'ID' in str(c).upper()), kolom_semua[0])
+                    kolom_nama = next((c for c in kolom_semua if 'NAMA' in str(c).upper()), None)
                     
-                    teks_judul = f"👤 {id_val}"
-                    if str(nama_val).strip() != '':
-                        teks_judul += f" - {nama_val}"
+                    teks_judul = f"👤 {row[kolom_id]}"
+                    if kolom_nama and str(row[kolom_nama]).strip() != '':
+                        teks_judul += f" - {row[kolom_nama]}"
                         
                     with st.expander(teks_judul):
-                        # Menampilkan semua data secara otomatis
-                        for nama_kolom, isi_kolom in baris.items():
-                            # Hanya tampilkan jika datanya tidak kosong
-                            if isi_kolom is not None and str(isi_kolom).strip() != "":
-                                st.write(f"**{nama_kolom}:** {isi_kolom}")
+                        for col in kolom_semua:
+                            st.write(f"**{col}:** {row[col]}")
                         
-                        # Deteksi Titik Kordinat (Sesuai nama kolom di gambar Anda: KOORDINAT X & KOORDINAT Y)
                         lat_val, lon_val = None, None
-                        kx = baris.get("KOORDINAT X", "")
-                        ky = baris.get("KOORDINAT Y", "")
+                        for col in kolom_semua:
+                            val_str = str(row[col]).strip().replace(',', '.')
+                            try:
+                                num_val = float(val_str)
+                                if -11.0 <= num_val <= 6.0 and lat_val is None:
+                                    lat_val = str(num_val)
+                                elif 95.0 <= num_val <= 141.0 and lon_val is None:
+                                    lon_val = str(num_val)
+                            except ValueError:
+                                pass
                         
-                        try:
-                            if kx and ky:
-                                num_x = float(str(kx).replace(',', '.'))
-                                num_y = float(str(ky).replace(',', '.'))
-                                
-                                # Cek Lintang (Latitude di Indonesia biasanya minus, bujur/Longitude ratusan)
-                                if -11.0 <= num_x <= 6.0:
-                                    lat_val, lon_val = str(num_x), str(num_y)
-                                elif -11.0 <= num_y <= 6.0:
-                                    lat_val, lon_val = str(num_y), str(num_x)
-                        except (ValueError, TypeError):
-                            pass
-                            
                         st.markdown("---")
                         if lat_val and lon_val:
                             url_map = f"https://www.google.com/maps/search/?api=1&query={lat_val},{lon_val}"
                             st.link_button("📍 Buka Lokasi di Google Maps", url_map, type="primary", use_container_width=True)
                         else:
-                            st.warning("⚠️ Data koordinat lokasi tidak ditemukan atau format tidak sesuai.")
+                            st.warning("⚠️ Data koordinat lokasi tidak ditemukan atau formatnya bukan angka.")
             else:
-                st.error("❌ Data tidak ditemukan di Database. Cek kembali penulisan kata kunci.")
+                st.error("❌ Data tidak ditemukan. Cek kembali kata kuncinya.")
                 
     except Exception as e:
-        st.error(f"Gagal menghubungkan ke database: {str(e)}")
-        st.info("Pastikan Anda sudah menginstall library di terminal: `pip install supabase` dan API Key/URL sudah benar.")
-        
+        st.error(f"Gagal memuat database. Error: {str(e)}")
+
 # ==========================================
 # TAB 8: UPDATE MASTER DATA (VERSI 2)
 # ==========================================
+import numpy as np
+import openpyxl
+
 with tab8:
     st.header("Tahap 8: Update Master Data Pelanggan (Versi 2)")
     st.write("Mengisi kolom yang KOSONG di Data Lama dengan data dari Data Baru berdasarkan IDPEL. TIDAK MENAMBAH KOLOM BARU dan data yang sudah terisi TIDAK akan ditimpa.")
@@ -1024,6 +946,8 @@ with tab8:
 # ==========================================
 # TAB 9: ISI PETUGAS (BERDASARKAN DAYA, IDPEL, & KOKED/KDDK)
 # ==========================================
+import openpyxl
+
 with tab9:
     st.header("Tahap 9: Penentuan Petugas Otomatis")
     st.write("Mengisi kolom Petugas secara otomatis berdasarkan logika Daya > 33000 (PLN), IDPEL khusus, dan 3 karakter tengah KOKED/KDDK.")
@@ -1150,6 +1074,12 @@ with tab9:
 # ==========================================
 # TAB 10: SPLIT DATA MENJADI MULTIPLE WORKSHEET / FILES
 # ==========================================
+import re
+import zipfile
+import io
+import pandas as pd
+import openpyxl
+
 with tab10:
     st.header("Tahap 10: Split Data ke Beberapa Worksheet atau File")
     st.write("Membagi satu tabel data menjadi beberapa worksheet (sheet) atau file Excel terpisah berdasarkan nilai pada kolom tertentu.")
@@ -1283,3 +1213,4 @@ with tab10:
 
         except Exception as e:
             st.error(f"❌ Terjadi kesalahan saat memproses data: {e}")
+
