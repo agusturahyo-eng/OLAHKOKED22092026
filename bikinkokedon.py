@@ -7,7 +7,7 @@ import io
 import zipfile
 import tempfile
 import re
-import gc
+import gc # Untuk garbage collection
 
 # Library PDF
 try:
@@ -47,12 +47,14 @@ def fix_masked_info(df_baru, df_master, df_sup_pb):
     df_baru = df_baru.reset_index(drop=True)
     nama_map, alamat_map = {}, {}
 
+    # 1. Ambil dari File Data Pelanggan Baru (Pelengkap) dahulu
     if not df_sup_pb.empty:
         sup_clean = df_sup_pb.drop_duplicates(subset=['IDPEL'], keep='first').copy()
         sup_clean = sup_clean[sup_clean['NAMA'].astype(str).str.strip().ne('') & ~sup_clean['NAMA'].astype(str).str.contains(r'\*', na=False)]
         nama_map.update(sup_clean.set_index('IDPEL')['NAMA'].to_dict())
         alamat_map.update(sup_clean.set_index('IDPEL')['ALAMAT'].to_dict())
 
+    # 2. Ambil dari Data Master (Timpa data pelengkap jika IDPEL ada di Master)
     if not df_master.empty:
         master_clean = df_master.drop_duplicates(subset=['IDPEL'], keep='first').copy()
         master_clean = master_clean[master_clean['NAMA'].astype(str).str.strip().ne('') & ~master_clean['NAMA'].astype(str).str.contains(r'\*', na=False)]
@@ -139,6 +141,7 @@ def process_standard_table(table):
         val = str(h).strip() if str(h).strip() != "" else f"KOLOM_{i+1}"
         headers.append(val)
         
+    # --- ANTI-ERROR REINDEXING ---
     seen = set()
     unique_headers = []
     for h in headers:
@@ -153,7 +156,7 @@ def process_standard_table(table):
     df = pd.DataFrame(cleaned_table[header_index+1:], columns=unique_headers)
     return df
 
-# --- FUNGSI NORMALISASI (UNTUK TAB 3) ---
+# --- FUNGSI NORMALISASI (HANYA DIGUNAKAN DI TAB 3) ---
 def find_target_column(col_name):
     col_clean = re.sub(r'[^A-Z0-9]', '', str(col_name).upper())
     
@@ -248,9 +251,8 @@ def baca_ekstrak_tabel(uploaded_file):
     df.columns = df.columns.astype(str).str.strip().str.upper()
     df = df.rename(columns={'KDDK': 'KOKED', 'TARIF': 'TARIP', 'GOL TARIF': 'TARIP', 'NAMAPNJ': 'ALAMAT', 'ID PEL': 'IDPEL', 'ID_PELANGGAN': 'IDPEL', 'NOPEL': 'IDPEL'})
     
-    # Mencegah Error Series Ambiguous dengan menghapus duplikasi kolom
+    # Mencegah error duplikasi kolom DBF
     df = df.loc[:, ~df.columns.duplicated(keep='first')]
-    
     return df, fname
 
 def proses_list_file(files, tipe_data):
@@ -284,6 +286,7 @@ def proses_list_file(files, tipe_data):
             if 'DAYA' not in df.columns: df['DAYA'] = 0
             df['IDPEL'] = df['IDPEL'].apply(clean_idpel)
             df['DAYA'] = df['DAYA'].apply(clean_daya)
+            df['KOKED'] = df['KOKED'].astype(str).str.strip()
             list_df.append(df[['IDPEL', 'NAMA', 'ALAMAT', 'KOKED', 'TARIP', 'DAYA']])
             
         elif tipe_data == 'sup_pb':
@@ -321,7 +324,7 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10 = st.tabs([
 ])
 
 # ==========================================
-# TAB 1: PERSIAPAN DATA (Disesuaikan Lengkap)
+# TAB 1: PERSIAPAN DATA (SUDAH DISESUAIKAN DENGAN SCRIPT KEDUA)
 # ==========================================
 with tab1:
     st.header("Tahap 1: Memecah Data Untuk Petugas Lapangan")
@@ -343,42 +346,66 @@ with tab1:
                     df_master = proses_list_file(files_master, 'master') if files_master else pd.DataFrame()
                     df_sup_pb = proses_list_file(files_suppb, 'sup_pb') if files_suppb else pd.DataFrame()
 
-                    # Unmasking data
+                    if df_baru.empty: raise ValueError("Data Bulan Ini kosong atau gagal dibaca.")
+                    if df_lama.empty: raise ValueError("Data Bulan Lalu kosong atau gagal dibaca.")
+
+                    # 1. PERBAIKI NAMA BINTANG (MASTER + PB PELENGKAP)
                     df_baru = fix_masked_info(df_baru, df_master, df_sup_pb)
-                    df_baru = df_baru[(df_baru['DAYA'] <= 33000) & (df_baru['IDPEL'] != '524050450911')].copy()
-                    
+
+                    # 2. FILTER DAYA & IDPEL BLOKIR
+                    idpel_block = '524050450911'
+                    df_baru = df_baru[(df_baru['DAYA'] <= 33000) & (df_baru['IDPEL'] != idpel_block)].copy().reset_index(drop=True)
+
+                    # 3. PISAHKAN PB & PELANGGAN TETAP
                     list_idpel_lama = set(df_lama['IDPEL'].tolist())
-                    
-                    # Pisahkan Pelanggan Baru (PB) dan Tetap
                     df_pb = df_baru[~df_baru['IDPEL'].isin(list_idpel_lama)].copy().reset_index(drop=True)
                     df_tetap = df_baru[df_baru['IDPEL'].isin(list_idpel_lama)].copy().reset_index(drop=True)
 
-                    # Pengurutan NO_URUT berdasarkan KOKED
-                    for df_target in [df_pb, df_tetap, df_baru]:
-                        if not df_target.empty:
-                            df_target['NO_URUT'] = df_target['KOKED'].astype(str).str[7:10]
-                            df_target['NO_URUT'] = pd.to_numeric(df_target['NO_URUT'], errors='coerce').fillna(0).astype(int)
-                            df_target.sort_values(by=['KOKED', 'NO_URUT'], inplace=True)
+                    for df in [df_pb, df_tetap]:
+                        if not df.empty:
+                            df['NO_URUT'] = df['KOKED'].astype(str).str[7:10]
+                            df['NO_URUT'] = pd.to_numeric(df['NO_URUT'], errors='coerce').fillna(0).astype(int)
+                            df.sort_values(by=['KOKED', 'NO_URUT'], inplace=True)
+
+                    kolom_export = ['IDPEL', 'KOKED', 'NAMA', 'ALAMAT', 'TARIP', 'DAYA']
 
                     zip_buffer = io.BytesIO()
                     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
                         
-                        # 1. GENERATE FILE PELANGGAN BARU (GABUNGAN)
-                        if not df_pb.empty: 
+                        # 4. EKSPORT REKAP PB SELURUH PETUGAS
+                        if not df_pb.empty:
                             df_pb_clean = df_pb.drop_duplicates(subset=['IDPEL'], keep='first')
-                            data_pb_bytes = to_excel_bytes(df_pb_clean[['IDPEL', 'KOKED', 'NAMA', 'ALAMAT', 'TARIP', 'DAYA']])
-                            zip_file.writestr("PELANGGAN_BARU.xlsx", data_pb_bytes)
-                            zip_file.writestr("PB_SEMUA_PETUGAS.xlsx", data_pb_bytes)
-                        
-                        # 2. GENERATE FILE UPDATE MASTER
-                        if not df_master.empty:
-                            df_master_upd = pd.concat([df_master, df_baru[['IDPEL', 'NAMA', 'ALAMAT', 'KOKED', 'TARIP', 'DAYA']]], ignore_index=True)
-                            df_master_upd = df_master_upd.drop_duplicates(subset=['IDPEL'], keep='last').reset_index(drop=True)
-                            zip_file.writestr("UPDATE_MASTER.xlsx", to_excel_bytes(df_master_upd))
-                        else:
-                            zip_file.writestr("UPDATE_MASTER.xlsx", to_excel_bytes(df_baru[['IDPEL', 'NAMA', 'ALAMAT', 'KOKED', 'TARIP', 'DAYA']]))
+                            pb_bytes = to_excel_bytes(df_pb_clean[kolom_export])
+                            zip_file.writestr("PB_SEMUA_PETUGAS.xlsx", pb_bytes)
+                            zip_file.writestr("PELANGGAN_BARU.xlsx", pb_bytes)
 
-                        # 3. GENERATE FILE PER-PETUGAS & PER-PETUGAS PELANGGAN BARU
+                        # 5. BUAT & EKSPORT DATA MASTER TER-UPDATE
+                        df_master_base = df_master[kolom_export].copy() if not df_master.empty else pd.DataFrame(columns=kolom_export)
+                        df_pb_master_format = df_pb[kolom_export].copy()
+                        df_master_combined = pd.concat([df_master_base, df_pb_master_format], ignore_index=True)
+                        df_master_combined = df_master_combined.drop_duplicates(subset=['IDPEL'], keep='first').reset_index(drop=True)
+
+                        df_baru_map = df_baru.set_index('IDPEL')
+                        in_baru = df_master_combined['IDPEL'].isin(df_baru_map.index)
+                        
+                        df_master_combined.loc[in_baru, 'KOKED'] = df_master_combined.loc[in_baru, 'IDPEL'].map(df_baru_map['KOKED'].to_dict())
+                        df_master_combined.loc[in_baru, 'TARIP'] = df_master_combined.loc[in_baru, 'IDPEL'].map(df_baru_map['TARIP'].to_dict())
+                        df_master_combined.loc[in_baru, 'DAYA'] = df_master_combined.loc[in_baru, 'IDPEL'].map(df_baru_map['DAYA'].to_dict())
+
+                        nama_baru_map = df_baru_map['NAMA'].to_dict()
+                        alamat_baru_map = df_baru_map['ALAMAT'].to_dict()
+
+                        updated_nama = df_master_combined['IDPEL'].map(nama_baru_map)
+                        valid_nama = in_baru & updated_nama.notna() & (updated_nama.astype(str).str.strip() != '') & (~updated_nama.astype(str).str.contains(r'\*', na=False))
+                        df_master_combined.loc[valid_nama, 'NAMA'] = updated_nama[valid_nama]
+
+                        updated_alamat = df_master_combined['IDPEL'].map(alamat_baru_map)
+                        valid_alamat = in_baru & updated_alamat.notna() & (updated_alamat.astype(str).str.strip() != '') & (~updated_alamat.astype(str).str.contains(r'\*', na=False))
+                        df_master_combined.loc[valid_alamat, 'ALAMAT'] = updated_alamat[valid_alamat]
+
+                        zip_file.writestr("MASTER_UPDATED.xlsx", to_excel_bytes(df_master_combined[kolom_export]))
+
+                        # 6. EKSPORT FILE WILAYAH/PETUGAS
                         mapping = {
                             'C01': 'JCA', 'C02': 'TAA', 'C03': 'JCB', 'C04': 'JCC', 'C05': 'NCD',
                             'C06': 'KBA', 'C07': 'TAB', 'C08': 'JCE', 'C09': 'TAC', 'C10': 'MBB',
@@ -389,23 +416,22 @@ with tab1:
                             'C29': ['JCJ', 'KCJ'], 'C30': 'TAJ', 'C31': 'MBK', 'C32': 'KBL',
                             'C33': 'TAK', 'C34': 'KAL', 'C35': 'JCL', 'C36': 'MBD'
                         }
-                        
-                        def add_to_zip(df_source, prefix=""):
+
+                        def export_excel(df_source, prefix=""):
                             if df_source.empty: return
                             for nama_file, kriteria in mapping.items():
-                                if isinstance(kriteria, list):
+                                if isinstance(kriteria, list): 
                                     temp_df = df_source[df_source['KOKED'].astype(str).str[3:6].isin(kriteria)]
-                                else:
+                                else: 
                                     temp_df = df_source[df_source['KOKED'].astype(str).str[3:6] == kriteria]
-                                    
-                                if not temp_df.empty: 
+                                if not temp_df.empty:
                                     temp_df = temp_df.drop_duplicates(subset=['IDPEL'], keep='first')
-                                    zip_file.writestr(f"{prefix}{nama_file}.xlsx", to_excel_bytes(temp_df[['IDPEL', 'KOKED', 'NAMA', 'ALAMAT', 'TARIP', 'DAYA']]))
+                                    zip_file.writestr(f"{prefix}{nama_file}.xlsx", to_excel_bytes(temp_df[kolom_export]))
+
+                        export_excel(df_pb, "PB_")
+                        export_excel(df_tetap, "")
                         
-                        add_to_zip(df_pb, "PB_")      # File Per Petugas PB (PB_C01.xlsx, dll)
-                        add_to_zip(df_tetap, "")       # File Per Petugas Tetap (C01.xlsx, dll)
-                        
-                    st.success("✅ File untuk petugas, update master, dan pelanggan baru berhasil dibuat!")
+                    st.success("✅ File untuk petugas, master, dan pelanggan baru berhasil dibuat!")
                     st.download_button("📥 Download Distribusi (.zip)", data=zip_buffer.getvalue(), file_name="Hasil_PerPetugas.zip", mime="application/zip")
                 except Exception as e:
                     st.error(f"❌ Error Tahap 1: {str(e)}")
@@ -430,7 +456,7 @@ with tab2:
                     df_compare = df_petugas[['IDPEL', 'KOKED']].merge(df_lama_pem[['IDPEL', 'KOKED']], on='IDPEL', suffixes=('_BARU', '_LAMA'))
                     df_changed = df_compare[(df_compare['KOKED_BARU'] != df_compare['KOKED_LAMA']) & (df_compare['KOKED_LAMA'] != '')]
                     
-                    df_petugas['NO_URUT'] = pd.to_numeric(df_petugas['KOKED'].astype(str).str[7:10], errors='coerce').fillna(0).astype(int)
+                    df_petugas['NO_URUT'] = pd.to_numeric(df_petugas['KOKED'].str[7:10], errors='coerce').fillna(0).astype(int)
                     df_petugas.sort_values(by=['KOKED', 'NO_URUT'], inplace=True)
 
                     zip_buffer2 = io.BytesIO()
