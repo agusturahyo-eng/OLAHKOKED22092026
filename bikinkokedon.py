@@ -19,7 +19,7 @@ except ImportError:
 # --- PENGATURAN HALAMAN ---
 st.set_page_config(page_title="Aplikasi Olah Data & Ekstrak PDF", layout="wide")
 
-# --- FUNGSI MEMBERSIHKAN DAYA & IDPEL ---
+# --- FUNGSI MEMBERSIHKAN DAYA & IDPEL (100% SESUAI SCRIPT TKINTER) ---
 def clean_daya(val):
     if pd.isna(val): return 0.0
     s = str(val).strip()
@@ -36,38 +36,47 @@ def clean_idpel(val):
     if pd.isna(val): return ""
     s = str(val).strip()
     if s.endswith('.0'): s = s[:-2]
-    digits = re.sub(r'\D', '', s)
-    if len(digits) >= 12:
-        return digits[:12]
-    return digits
+    return s
 
 # --- FUNGSI UN-MASKING (NAMA/ALAMAT BINTANG) ---
 def fix_masked_info(df_baru, df_master, df_sup_pb):
     if df_baru.empty: return df_baru
     df_baru = df_baru.reset_index(drop=True)
-    nama_map, alamat_map = {}, {}
+
+    nama_map = {}
+    alamat_map = {}
 
     # 1. Ambil dari File Data Pelanggan Baru (Pelengkap) dahulu
     if not df_sup_pb.empty:
         sup_clean = df_sup_pb.drop_duplicates(subset=['IDPEL'], keep='first').copy()
-        sup_clean = sup_clean[sup_clean['NAMA'].astype(str).str.strip().ne('') & ~sup_clean['NAMA'].astype(str).str.contains(r'\*', na=False)]
+        sup_clean = sup_clean[
+            sup_clean['NAMA'].astype(str).str.strip().ne('') &
+            ~sup_clean['NAMA'].astype(str).str.contains(r'\*', na=False)
+        ]
         nama_map.update(sup_clean.set_index('IDPEL')['NAMA'].to_dict())
         alamat_map.update(sup_clean.set_index('IDPEL')['ALAMAT'].to_dict())
 
     # 2. Ambil dari Data Master (Timpa data pelengkap jika IDPEL ada di Master)
     if not df_master.empty:
         master_clean = df_master.drop_duplicates(subset=['IDPEL'], keep='first').copy()
-        master_clean = master_clean[master_clean['NAMA'].astype(str).str.strip().ne('') & ~master_clean['NAMA'].astype(str).str.contains(r'\*', na=False)]
+        master_clean = master_clean[
+            master_clean['NAMA'].astype(str).str.strip().ne('') &
+            ~master_clean['NAMA'].astype(str).str.contains(r'\*', na=False)
+        ]
         nama_map.update(master_clean.set_index('IDPEL')['NAMA'].to_dict())
         alamat_map.update(master_clean.set_index('IDPEL')['ALAMAT'].to_dict())
 
-    if not nama_map and not alamat_map: return df_baru
+    if not nama_map and not alamat_map:
+        return df_baru
 
+    # Deteksi NAMA & ALAMAT yang di-masking/bintang
     is_masked_nama = df_baru['NAMA'].astype(str).str.contains(r'\*', na=False) | df_baru['NAMA'].isna() | (df_baru['NAMA'].astype(str).str.strip() == '')
     is_masked_alamat = df_baru['ALAMAT'].astype(str).str.contains(r'\*', na=False) | df_baru['ALAMAT'].isna() | (df_baru['ALAMAT'].astype(str).str.strip() == '')
 
+    # Timpa dengan nilai dari kamus gabungan
     df_baru.loc[is_masked_nama, 'NAMA'] = df_baru.loc[is_masked_nama, 'IDPEL'].map(nama_map).fillna(df_baru.loc[is_masked_nama, 'NAMA'])
     df_baru.loc[is_masked_alamat, 'ALAMAT'] = df_baru.loc[is_masked_alamat, 'IDPEL'].map(alamat_map).fillna(df_baru.loc[is_masked_alamat, 'ALAMAT'])
+
     return df_baru
 
 # --- LOGIKA EKSTRAKSI TABEL PDF TIPE 1 (HYBRID) ---
@@ -141,7 +150,6 @@ def process_standard_table(table):
         val = str(h).strip() if str(h).strip() != "" else f"KOLOM_{i+1}"
         headers.append(val)
         
-    # --- ANTI-ERROR REINDEXING ---
     seen = set()
     unique_headers = []
     for h in headers:
@@ -250,9 +258,7 @@ def baca_ekstrak_tabel(uploaded_file):
 
     df.columns = df.columns.astype(str).str.strip().str.upper()
     df = df.rename(columns={'KDDK': 'KOKED', 'TARIF': 'TARIP', 'GOL TARIF': 'TARIP', 'NAMAPNJ': 'ALAMAT', 'ID PEL': 'IDPEL', 'ID_PELANGGAN': 'IDPEL', 'NOPEL': 'IDPEL'})
-    
-    # Mencegah error duplikasi kolom DBF
-    df = df.loc[:, ~df.columns.duplicated(keep='first')]
+    df = df.loc[:, ~df.columns.duplicated(keep='first')] # Mencegah error duplikasi kolom DBF
     return df, fname
 
 def proses_list_file(files, tipe_data):
@@ -324,7 +330,7 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10 = st.tabs([
 ])
 
 # ==========================================
-# TAB 1: PERSIAPAN DATA (SUDAH DISESUAIKAN DENGAN SCRIPT KEDUA)
+# TAB 1: PERSIAPAN DATA (LOGIKA 100% SESUAI SCRIPT TKINTER)
 # ==========================================
 with tab1:
     st.header("Tahap 1: Memecah Data Untuk Petugas Lapangan")
@@ -341,6 +347,7 @@ with tab1:
         else:
             with st.spinner("Menyiapkan data untuk petugas..."):
                 try:
+                    # 1. BACA DATA
                     df_baru = proses_list_file(files_baru, 'baru')
                     df_lama = proses_list_file(files_lama, 'lama')
                     df_master = proses_list_file(files_master, 'master') if files_master else pd.DataFrame()
@@ -349,14 +356,14 @@ with tab1:
                     if df_baru.empty: raise ValueError("Data Bulan Ini kosong atau gagal dibaca.")
                     if df_lama.empty: raise ValueError("Data Bulan Lalu kosong atau gagal dibaca.")
 
-                    # 1. PERBAIKI NAMA BINTANG (MASTER + PB PELENGKAP)
+                    # 2. PERBAIKI NAMA BINTANG (MASTER + PB PELENGKAP)
                     df_baru = fix_masked_info(df_baru, df_master, df_sup_pb)
 
-                    # 2. FILTER DAYA & IDPEL BLOKIR
+                    # 3. FILTER DAYA & IDPEL BLOKIR
                     idpel_block = '524050450911'
                     df_baru = df_baru[(df_baru['DAYA'] <= 33000) & (df_baru['IDPEL'] != idpel_block)].copy().reset_index(drop=True)
 
-                    # 3. PISAHKAN PB & PELANGGAN TETAP
+                    # 4. PISAHKAN PB & PELANGGAN TETAP
                     list_idpel_lama = set(df_lama['IDPEL'].tolist())
                     df_pb = df_baru[~df_baru['IDPEL'].isin(list_idpel_lama)].copy().reset_index(drop=True)
                     df_tetap = df_baru[df_baru['IDPEL'].isin(list_idpel_lama)].copy().reset_index(drop=True)
@@ -372,14 +379,12 @@ with tab1:
                     zip_buffer = io.BytesIO()
                     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
                         
-                        # 4. EKSPORT REKAP PB SELURUH PETUGAS
+                        # 5. EKSPORT REKAP PB SELURUH PETUGAS
                         if not df_pb.empty:
                             df_pb_clean = df_pb.drop_duplicates(subset=['IDPEL'], keep='first')
-                            pb_bytes = to_excel_bytes(df_pb_clean[kolom_export])
-                            zip_file.writestr("PB_SEMUA_PETUGAS.xlsx", pb_bytes)
-                            zip_file.writestr("PELANGGAN_BARU.xlsx", pb_bytes)
+                            zip_file.writestr("PB_SEMUA_PETUGAS.xlsx", to_excel_bytes(df_pb_clean[kolom_export]))
 
-                        # 5. BUAT & EKSPORT DATA MASTER TER-UPDATE
+                        # 6. BUAT & EKSPORT DATA MASTER TER-UPDATE
                         df_master_base = df_master[kolom_export].copy() if not df_master.empty else pd.DataFrame(columns=kolom_export)
                         df_pb_master_format = df_pb[kolom_export].copy()
                         df_master_combined = pd.concat([df_master_base, df_pb_master_format], ignore_index=True)
@@ -405,7 +410,7 @@ with tab1:
 
                         zip_file.writestr("MASTER_UPDATED.xlsx", to_excel_bytes(df_master_combined[kolom_export]))
 
-                        # 6. EKSPORT FILE WILAYAH/PETUGAS
+                        # 7. EKSPORT FILE WILAYAH/PETUGAS
                         mapping = {
                             'C01': 'JCA', 'C02': 'TAA', 'C03': 'JCB', 'C04': 'JCC', 'C05': 'NCD',
                             'C06': 'KBA', 'C07': 'TAB', 'C08': 'JCE', 'C09': 'TAC', 'C10': 'MBB',
