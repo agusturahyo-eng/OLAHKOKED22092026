@@ -7,7 +7,7 @@ import io
 import zipfile
 import tempfile
 import re
-import gc # Untuk garbage collection
+import gc
 
 # Library PDF
 try:
@@ -41,7 +41,7 @@ def clean_idpel(val):
         return digits[:12]
     return digits
 
-# --- FUNGSI UN-MASKING (NAMA/ALAMAT BINTANG) - Sesuai File 2 ---
+# --- FUNGSI UN-MASKING (NAMA/ALAMAT BINTANG) ---
 def fix_masked_info(df_baru, df_master, df_sup_pb):
     if df_baru.empty: return df_baru
     df_baru = df_baru.reset_index(drop=True)
@@ -153,7 +153,7 @@ def process_standard_table(table):
     df = pd.DataFrame(cleaned_table[header_index+1:], columns=unique_headers)
     return df
 
-# --- FUNGSI NORMALISASI (HANYA DIGUNAKAN DI TAB 3) ---
+# --- FUNGSI NORMALISASI (UNTUK TAB 3) ---
 def find_target_column(col_name):
     col_clean = re.sub(r'[^A-Z0-9]', '', str(col_name).upper())
     
@@ -248,7 +248,7 @@ def baca_ekstrak_tabel(uploaded_file):
     df.columns = df.columns.astype(str).str.strip().str.upper()
     df = df.rename(columns={'KDDK': 'KOKED', 'TARIF': 'TARIP', 'GOL TARIF': 'TARIP', 'NAMAPNJ': 'ALAMAT', 'ID PEL': 'IDPEL', 'ID_PELANGGAN': 'IDPEL', 'NOPEL': 'IDPEL'})
     
-    # --- PENYELESAIAN ERROR SCRIPT 1: Hapus Duplikasi Kolom ---
+    # Mencegah Error Series Ambiguous dengan menghapus duplikasi kolom
     df = df.loc[:, ~df.columns.duplicated(keep='first')]
     
     return df, fname
@@ -321,7 +321,7 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10 = st.tabs([
 ])
 
 # ==========================================
-# TAB 1: PERSIAPAN DATA (Telah disempurnakan)
+# TAB 1: PERSIAPAN DATA (Disesuaikan Lengkap)
 # ==========================================
 with tab1:
     st.header("Tahap 1: Memecah Data Untuk Petugas Lapangan")
@@ -343,27 +343,42 @@ with tab1:
                     df_master = proses_list_file(files_master, 'master') if files_master else pd.DataFrame()
                     df_sup_pb = proses_list_file(files_suppb, 'sup_pb') if files_suppb else pd.DataFrame()
 
+                    # Unmasking data
                     df_baru = fix_masked_info(df_baru, df_master, df_sup_pb)
                     df_baru = df_baru[(df_baru['DAYA'] <= 33000) & (df_baru['IDPEL'] != '524050450911')].copy()
                     
                     list_idpel_lama = set(df_lama['IDPEL'].tolist())
                     
-                    # --- MENERAPKAN LOGIKA PENGURUTAN (SORT) FILE 2 ---
+                    # Pisahkan Pelanggan Baru (PB) dan Tetap
                     df_pb = df_baru[~df_baru['IDPEL'].isin(list_idpel_lama)].copy().reset_index(drop=True)
                     df_tetap = df_baru[df_baru['IDPEL'].isin(list_idpel_lama)].copy().reset_index(drop=True)
 
-                    for df_target in [df_pb, df_tetap]:
+                    # Pengurutan NO_URUT berdasarkan KOKED
+                    for df_target in [df_pb, df_tetap, df_baru]:
                         if not df_target.empty:
-                            df_target['NO_URUT'] = df_target['KOKED'].str[7:10]
+                            df_target['NO_URUT'] = df_target['KOKED'].astype(str).str[7:10]
                             df_target['NO_URUT'] = pd.to_numeric(df_target['NO_URUT'], errors='coerce').fillna(0).astype(int)
                             df_target.sort_values(by=['KOKED', 'NO_URUT'], inplace=True)
 
                     zip_buffer = io.BytesIO()
                     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+                        
+                        # 1. GENERATE FILE PELANGGAN BARU (GABUNGAN)
                         if not df_pb.empty: 
                             df_pb_clean = df_pb.drop_duplicates(subset=['IDPEL'], keep='first')
-                            zip_file.writestr("PB_SEMUA_PETUGAS.xlsx", to_excel_bytes(df_pb_clean[['IDPEL', 'KOKED', 'NAMA', 'ALAMAT', 'TARIP', 'DAYA']]))
+                            data_pb_bytes = to_excel_bytes(df_pb_clean[['IDPEL', 'KOKED', 'NAMA', 'ALAMAT', 'TARIP', 'DAYA']])
+                            zip_file.writestr("PELANGGAN_BARU.xlsx", data_pb_bytes)
+                            zip_file.writestr("PB_SEMUA_PETUGAS.xlsx", data_pb_bytes)
                         
+                        # 2. GENERATE FILE UPDATE MASTER
+                        if not df_master.empty:
+                            df_master_upd = pd.concat([df_master, df_baru[['IDPEL', 'NAMA', 'ALAMAT', 'KOKED', 'TARIP', 'DAYA']]], ignore_index=True)
+                            df_master_upd = df_master_upd.drop_duplicates(subset=['IDPEL'], keep='last').reset_index(drop=True)
+                            zip_file.writestr("UPDATE_MASTER.xlsx", to_excel_bytes(df_master_upd))
+                        else:
+                            zip_file.writestr("UPDATE_MASTER.xlsx", to_excel_bytes(df_baru[['IDPEL', 'NAMA', 'ALAMAT', 'KOKED', 'TARIP', 'DAYA']]))
+
+                        # 3. GENERATE FILE PER-PETUGAS & PER-PETUGAS PELANGGAN BARU
                         mapping = {
                             'C01': 'JCA', 'C02': 'TAA', 'C03': 'JCB', 'C04': 'JCC', 'C05': 'NCD',
                             'C06': 'KBA', 'C07': 'TAB', 'C08': 'JCE', 'C09': 'TAC', 'C10': 'MBB',
@@ -378,15 +393,19 @@ with tab1:
                         def add_to_zip(df_source, prefix=""):
                             if df_source.empty: return
                             for nama_file, kriteria in mapping.items():
-                                temp_df = df_source[df_source['KOKED'].str[3:6].isin(kriteria)] if isinstance(kriteria, list) else df_source[df_source['KOKED'].str[3:6] == kriteria]
+                                if isinstance(kriteria, list):
+                                    temp_df = df_source[df_source['KOKED'].astype(str).str[3:6].isin(kriteria)]
+                                else:
+                                    temp_df = df_source[df_source['KOKED'].astype(str).str[3:6] == kriteria]
+                                    
                                 if not temp_df.empty: 
                                     temp_df = temp_df.drop_duplicates(subset=['IDPEL'], keep='first')
                                     zip_file.writestr(f"{prefix}{nama_file}.xlsx", to_excel_bytes(temp_df[['IDPEL', 'KOKED', 'NAMA', 'ALAMAT', 'TARIP', 'DAYA']]))
                         
-                        add_to_zip(df_pb, "PB_")
-                        add_to_zip(df_tetap, "")
+                        add_to_zip(df_pb, "PB_")      # File Per Petugas PB (PB_C01.xlsx, dll)
+                        add_to_zip(df_tetap, "")       # File Per Petugas Tetap (C01.xlsx, dll)
                         
-                    st.success("✅ File untuk petugas berhasil dibuat!")
+                    st.success("✅ File untuk petugas, update master, dan pelanggan baru berhasil dibuat!")
                     st.download_button("📥 Download Distribusi (.zip)", data=zip_buffer.getvalue(), file_name="Hasil_PerPetugas.zip", mime="application/zip")
                 except Exception as e:
                     st.error(f"❌ Error Tahap 1: {str(e)}")
@@ -411,7 +430,7 @@ with tab2:
                     df_compare = df_petugas[['IDPEL', 'KOKED']].merge(df_lama_pem[['IDPEL', 'KOKED']], on='IDPEL', suffixes=('_BARU', '_LAMA'))
                     df_changed = df_compare[(df_compare['KOKED_BARU'] != df_compare['KOKED_LAMA']) & (df_compare['KOKED_LAMA'] != '')]
                     
-                    df_petugas['NO_URUT'] = pd.to_numeric(df_petugas['KOKED'].str[7:10], errors='coerce').fillna(0).astype(int)
+                    df_petugas['NO_URUT'] = pd.to_numeric(df_petugas['KOKED'].astype(str).str[7:10], errors='coerce').fillna(0).astype(int)
                     df_petugas.sort_values(by=['KOKED', 'NO_URUT'], inplace=True)
 
                     zip_buffer2 = io.BytesIO()
@@ -751,19 +770,15 @@ with tab6:
 with tab7:
     st.header("Tahap 7: Info Data & Lokasi Pelanggan")
     
-    # 1. SETUP KONEKSI SUPABASE
-    # Ganti dengan URL dan API Key milik Anda!
     SUPABASE_URL = "https://wnzedfyiublmzmjkzsrq.supabase.co" 
     SUPABASE_KEY = "sb_publishable_g1WlECVLkTdNBMwL2QxWlA_gOu6l4VR"
     
-    # Menyiapkan koneksi ke database (menggunakan cache_resource agar koneksi stabil)
     @st.cache_resource
     def init_koneksi():
         from supabase import create_client
         return create_client(SUPABASE_URL, SUPABASE_KEY)
     
     try:
-        # Menghubungkan ke server Singapura
         supabase = init_koneksi()
         
         with st.form(key="form_pencarian_supabase"):
@@ -775,23 +790,18 @@ with tab7:
             kunci_bersih = str(kata_kunci).strip()
             
             with st.spinner("Mencari langsung di Database Server..."):
-                # 2. PROSES PENCARIAN DATABASE (Mendukung teks dan angka)
                 if kategori == "IDPEL":
-                    # Menggunakan eq atau ilike agar pencarian angka aman
                     respon = supabase.table("dataplg3").select("*").ilike("IDPEL", f"%{kunci_bersih}%").execute()
                 elif kategori == "NAMA":
                     respon = supabase.table("dataplg3").select("*").ilike("NAMA", f"%{kunci_bersih}%").execute()
                 elif kategori == "NOMOR METER":
                     respon = supabase.table("dataplg3").select("*").ilike("NOMORKWH", f"%{kunci_bersih}%").execute()
                 else: 
-                    # Pencarian Multi-kolom
                     kondisi_or = f"IDPEL.ilike.%{kunci_bersih}%,NAMA.ilike.%{kunci_bersih}%,ALAMAT.ilike.%{kunci_bersih}%,NOMORKWH.ilike.%{kunci_bersih}%"
                     respon = supabase.table("dataplg3").select("*").or_(kondisi_or).execute()
                 
-                # Hasil jawaban dari server langsung dalam bentuk list
                 data_hasil = respon.data 
                 
-            # 3. MENAMPILKAN HASIL
             if len(data_hasil) > 0:
                 st.success(f"**Berhasil! Ditemukan {len(data_hasil)} :**")
                 
@@ -804,13 +814,10 @@ with tab7:
                         teks_judul += f" - {nama_val}"
                         
                     with st.expander(teks_judul):
-                        # Menampilkan semua data secara otomatis
                         for nama_kolom, isi_kolom in baris.items():
-                            # Hanya tampilkan jika datanya tidak kosong
                             if isi_kolom is not None and str(isi_kolom).strip() != "":
                                 st.write(f"**{nama_kolom}:** {isi_kolom}")
                         
-                        # Deteksi Titik Kordinat (Sesuai nama kolom di gambar Anda: KOORDINAT X & KOORDINAT Y)
                         lat_val, lon_val = None, None
                         kx = baris.get("KOORDINAT X", "")
                         ky = baris.get("KOORDINAT Y", "")
@@ -820,7 +827,6 @@ with tab7:
                                 num_x = float(str(kx).replace(',', '.'))
                                 num_y = float(str(ky).replace(',', '.'))
                                 
-                                # Cek Lintang (Latitude di Indonesia biasanya minus, bujur/Longitude ratusan)
                                 if -11.0 <= num_x <= 6.0:
                                     lat_val, lon_val = str(num_x), str(num_y)
                                 elif -11.0 <= num_y <= 6.0:
@@ -839,12 +845,10 @@ with tab7:
                 
     except Exception as e:
         st.error(f"Gagal menghubungkan ke database: {str(e)}")
-        st.info("Pastikan Anda sudah menginstall library di terminal: `pip install supabase` dan API Key/URL sudah benar.")
         
 # ==========================================
 # TAB 8: UPDATE MASTER DATA (VERSI 2)
 # ==========================================
-import numpy as np
 import openpyxl
 
 with tab8:
@@ -864,7 +868,6 @@ with tab8:
         else:
             with st.spinner("Sedang memproses update data..."):
                 try:
-                    # Membaca file sebagai Teks (String)
                     df_lama = pd.read_excel(file_lama, dtype=str)
                     df_baru = pd.read_excel(file_baru, dtype=str)
 
@@ -891,11 +894,9 @@ with tab8:
                     if 'idpel' not in df_lama.columns or 'idpel' not in df_baru.columns:
                         st.error("❌ Kedua file harus memiliki kolom 'IDPEL'!")
                     else:
-                        # Bersihkan spasi kosong
                         df_lama = df_lama.replace(r'^\s*$', np.nan, regex=True).replace(['nan', 'NaN', '<NA>'], np.nan)
                         df_baru = df_baru.replace(r'^\s*$', np.nan, regex=True).replace(['nan', 'NaN', '<NA>'], np.nan)
 
-                        # Hapus .0 di akhiran IDPEL & NIK
                         for col in df_lama.columns:
                             df_lama[col] = df_lama[col].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
                             df_lama[col] = df_lama[col].replace(['nan', 'None', '<NA>'], np.nan)
@@ -914,7 +915,6 @@ with tab8:
                         df_lama.reset_index(inplace=True)
                         df_result = df_lama[kolom_format_lama]
 
-                        # Bersihkan semua data jadi string dan kosongkan NaN sebelum diekspor
                         df_export = df_result.copy()
                         for col in df_export.columns:
                             df_export[col] = df_export[col].fillna("").astype(str)
@@ -928,24 +928,19 @@ with tab8:
                         with pd.ExcelWriter(output_t8, engine='openpyxl') as writer:
                             df_export.to_excel(writer, index=False, sheet_name='Master_Updated')
                             
-                            # --- SOLUSI AMPUH: PAKSA NILAI & TIPE DATA SEL JADI TEKS ---
                             ws = writer.sheets['Master_Updated']
                             for col in ws.columns:
                                 max_len = 0
                                 col_letter = openpyxl.utils.get_column_letter(col[0].column)
                                 for cell in col:
                                     if cell.value is not None and str(cell.value).strip() != "":
-                                        # Paksa isi data (value) menjadi tipe teks di sistem internal Python
                                         cell.value = str(cell.value)
-                                        # Kunci perlakukan tipe (data_type) menjadi string murni ('s')
                                         cell.data_type = 's'
-                                        # Set visual format teks
                                         cell.number_format = '@'
 
                                     val_str = str(cell.value) if cell.value is not None else ""
                                     max_len = max(max_len, len(val_str))
                                 
-                                # Lebarkan kolom
                                 ws.column_dimensions[col_letter].width = max(max_len + 3, 12)
 
                         st.download_button(
@@ -958,12 +953,10 @@ with tab8:
 
                 except Exception as e:
                     st.error(f"❌ Terjadi kesalahan saat memproses data: {e}")
-                    
-# ==========================================
-# TAB 9: ISI PETUGAS (BERDASARKAN DAYA, IDPEL, & KOKED/KDDK)
-# ==========================================
-import openpyxl
 
+# ==========================================
+# TAB 9: ISI PETUGAS
+# ==========================================
 with tab9:
     st.header("Tahap 9: Penentuan Petugas Otomatis")
     st.write("Mengisi kolom Petugas secara otomatis berdasarkan logika Daya > 33000 (PLN), IDPEL khusus, dan 3 karakter tengah KOKED/KDDK.")
@@ -977,38 +970,30 @@ with tab9:
         else:
             with st.spinner("Sedang memproses penentuan petugas..."):
                 try:
-                    # --- PERBAIKAN: Baca file sebagai Teks (String) dari awal ---
                     df = pd.read_excel(file_t9, dtype=str)
                     
-                    # Buat dataframe kerja dengan nama kolom huruf kecil semua
                     df_work = df.copy()
                     df_work.columns = df_work.columns.astype(str).str.strip().str.lower()
 
-                    # Jika di Excel bernama 'kddk', otomatis disesuaikan menjadi 'koked'
                     if 'kddk' in df_work.columns and 'koked' not in df_work.columns:
                         df_work['koked'] = df_work['kddk']
 
-                    # Cek keberadaan kolom wajib
                     if not {'idpel', 'koked', 'daya'}.issubset(set(df_work.columns)):
                         st.error("❌ Error: File Excel harus memiliki kolom bernama 'IDPEL', 'KOKED' (atau 'KDDK'), dan 'DAYA'.")
                     else:
                         def tentukan_petugas_tab9(row):
-                            # 1. Konversi Daya ke Angka
                             try:
                                 daya_val = str(row['daya']).replace(',', '.').strip()
                                 daya = float(daya_val)
                             except:
                                 daya = 0.0
 
-                            # 2. Ambil nilai IDPEL & KOKED
                             idpel = str(row['idpel']).replace('.0', '').strip() if pd.notna(row['idpel']) and str(row['idpel']).lower() != 'nan' else ""
                             koked = str(row['koked']).strip() if pd.notna(row['koked']) and str(row['koked']).lower() != 'nan' else ""
 
-                            # --- SYARAT 1: Daya > 33000 -> PLN ---
                             if daya > 33000:
                                 return "PLN"
                             
-                            # --- SYARAT 2: IDPEL Khusus ---
                             idpel_khusus = {
                                 "524051069054": "c28", "524051263717": "c36", "524051265123": "c36",
                                 "524051104194": "c04", "524051000615": "c08", "524050867033": "c08"
@@ -1016,7 +1001,6 @@ with tab9:
                             if idpel in idpel_khusus:
                                 return idpel_khusus[idpel]
                             
-                            # --- SYARAT 3: MID 3 karakter KOKED ---
                             if len(koked) >= 6:
                                 kode_mid = koked[3:6].upper()
                                 mapping_kddk = {
@@ -1044,11 +1028,9 @@ with tab9:
                         else:
                             df['petugas'] = hasil_petugas
 
-                        # --- PERBAIKAN: Bersihkan data sebelum di-export ---
                         for col in df.columns:
                             df[col] = df[col].fillna("").astype(str)
                             df[col] = df[col].replace({'nan': '', 'None': '', '<NA>': ''})
-                            # Hapus desimal .0 jika ada yang tersisa di IDPEL/NIK
                             if 'idpel' in col.lower() or 'nik' in col.lower():
                                 df[col] = df[col].str.replace(r'\.0$', '', regex=True)
 
@@ -1056,7 +1038,6 @@ with tab9:
                         st.write("Preview Hasil Data:")
                         st.dataframe(df.head(15), use_container_width=True)
 
-                        # --- PERBAIKAN: Export dengan proteksi sel Teks ---
                         output = io.BytesIO()
                         with pd.ExcelWriter(output, engine='openpyxl') as writer:
                             df.to_excel(writer, index=False, sheet_name='Data_Petugas')
@@ -1067,7 +1048,6 @@ with tab9:
                                 col_letter = openpyxl.utils.get_column_letter(col[0].column)
                                 for cell in col:
                                     if cell.value is not None and str(cell.value).strip() != "":
-                                        # Kunci sebagai String murni
                                         cell.value = str(cell.value)
                                         cell.data_type = 's'
                                         cell.number_format = '@'
@@ -1088,14 +1068,8 @@ with tab9:
                     st.error(f"❌ Terjadi kesalahan saat memproses data: {e}")
 
 # ==========================================
-# TAB 10: SPLIT DATA MENJADI MULTIPLE WORKSHEET / FILES
+# TAB 10: SPLIT DATA
 # ==========================================
-import re
-import zipfile
-import io
-import pandas as pd
-import openpyxl
-
 with tab10:
     st.header("Tahap 10: Split Data ke Beberapa Worksheet atau File")
     st.write("Membagi satu tabel data menjadi beberapa worksheet (sheet) atau file Excel terpisah berdasarkan nilai pada kolom tertentu.")
@@ -1105,14 +1079,11 @@ with tab10:
 
     if file_t10 is not None:
         try:
-            # --- PERBAIKAN 1: Baca seluruh file sebagai String (Teks) dari awal ---
             df_t10 = pd.read_excel(file_t10, dtype=str)
             
-            # Bersihkan "nan" atau ".0" yang mungkin terbawa saat dibaca sebagai string
             for col in df_t10.columns:
                 df_t10[col] = df_t10[col].fillna("").astype(str)
                 df_t10[col] = df_t10[col].replace({'nan': '', 'None': '', '<NA>': ''})
-                # Hapus akhiran .0 untuk kolom IDPEL atau NIK jika ada
                 if 'idpel' in str(col).lower() or 'nik' in str(col).lower():
                     df_t10[col] = df_t10[col].str.replace(r'\.0$', '', regex=True)
 
@@ -1121,17 +1092,14 @@ with tab10:
 
             st.markdown("### Pengaturan Split Data")
             
-            # 1. Pilih kolom sebagai acuan
             kolom_pilihan = st.selectbox("Split berdasarkan kolom (Specific column):", df_t10.columns.tolist())
 
-            # 2. Opsi Prefix & Suffix untuk penamaan
             col1, col2 = st.columns(2)
             with col1:
                 prefix = st.text_input("Prefix (opsional):", help="Tambahan teks di depan nama sheet/file")
             with col2:
                 suffix = st.text_input("Suffix (opsional):", help="Misal: Nik Padan")
 
-            # 3. Pilihan Output (Sheet vs File ZIP)
             mode_split = st.radio(
                 "Pilih Mode Output:", 
                 ["Multiple Sheets (1 File Excel)", "Multiple Files (Download sebagai ZIP)"],
@@ -1141,7 +1109,6 @@ with tab10:
             if st.button("Proses Split Data", type="primary"):
                 with st.spinner("Sedang membagi data..."):
                     
-                    # Mengambil nilai unik, abaikan yang kosong
                     df_t10_filtered = df_t10[df_t10[kolom_pilihan].str.strip() != ""]
                     nilai_unik = df_t10_filtered[kolom_pilihan].unique()
 
@@ -1151,7 +1118,6 @@ with tab10:
                             for nilai in nilai_unik:
                                 df_filtered = df_t10[df_t10[kolom_pilihan] == nilai]
 
-                                # Pembuatan nama sheet
                                 nilai_str = str(nilai).strip()
                                 nama_custom = f"{prefix} {nilai_str} {suffix}".strip()
                                 nama_bersih = re.sub(r'[\\/*?:\[\]]', '', nama_custom)[:31]
@@ -1159,7 +1125,6 @@ with tab10:
 
                                 df_filtered.to_excel(writer, index=False, sheet_name=nama_bersih)
 
-                                # --- PERBAIKAN 2: Kunci Teks Anti-E+15 untuk setiap Sheet ---
                                 ws = writer.sheets[nama_bersih]
                                 for col in ws.columns:
                                     max_len = 0
@@ -1183,25 +1148,21 @@ with tab10:
                         )
 
                     else:
-                        # Mode: Multiple Files via ZIP
                         zip_buffer = io.BytesIO()
                         with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
                             for nilai in nilai_unik:
                                 df_filtered = df_t10[df_t10[kolom_pilihan] == nilai]
                                 
-                                # Pembuatan nama file
                                 nilai_str = str(nilai).strip()
                                 nama_custom = f"{prefix} {nilai_str} {suffix}".strip()
                                 nama_bersih = re.sub(r'[\\/*?:\[\]<>|"]', '', nama_custom)
                                 if not nama_bersih: nama_bersih = "Data"
                                 nama_file = f"{nama_bersih}.xlsx"
 
-                                # Bikin file excel di memory untuk file spesifik ini
                                 excel_buffer = io.BytesIO()
                                 with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
                                     df_filtered.to_excel(writer, index=False, sheet_name="Data")
                                     
-                                    # --- PERBAIKAN 3: Kunci Teks Anti-E+15 untuk setiap File ---
                                     ws = writer.sheets["Data"]
                                     for col in ws.columns:
                                         max_len = 0
@@ -1215,7 +1176,6 @@ with tab10:
                                             max_len = max(max_len, len(val_str))
                                         ws.column_dimensions[col_letter].width = max(max_len + 3, 12)
                                 
-                                # Simpan file excel ke dalam ZIP
                                 zip_file.writestr(nama_file, excel_buffer.getvalue())
 
                         st.success(f"✅ Data berhasil dipisah menjadi {len(nilai_unik)} file Excel terpisah!")
