@@ -19,7 +19,7 @@ except ImportError:
 # --- PENGATURAN HALAMAN ---
 st.set_page_config(page_title="Aplikasi Olah Data & Ekstrak PDF", layout="wide")
 
-# --- FUNGSI MEMBERSIHKAN DAYA & IDPEL (100% SESUAI SCRIPT TKINTER) ---
+# --- FUNGSI MEMBERSIHKAN DAYA & IDPEL (100% SAMA DENGAN TKINTER) ---
 def clean_daya(val):
     if pd.isna(val): return 0.0
     s = str(val).strip()
@@ -73,11 +73,101 @@ def fix_masked_info(df_baru, df_master, df_sup_pb):
     is_masked_nama = df_baru['NAMA'].astype(str).str.contains(r'\*', na=False) | df_baru['NAMA'].isna() | (df_baru['NAMA'].astype(str).str.strip() == '')
     is_masked_alamat = df_baru['ALAMAT'].astype(str).str.contains(r'\*', na=False) | df_baru['ALAMAT'].isna() | (df_baru['ALAMAT'].astype(str).str.strip() == '')
 
-    # Timpa dengan nilai dari kamus gabungan
+    # Timpa dengan nilai dari kamus gabungan (Master + PB Pelengkap)
     df_baru.loc[is_masked_nama, 'NAMA'] = df_baru.loc[is_masked_nama, 'IDPEL'].map(nama_map).fillna(df_baru.loc[is_masked_nama, 'NAMA'])
     df_baru.loc[is_masked_alamat, 'ALAMAT'] = df_baru.loc[is_masked_alamat, 'IDPEL'].map(alamat_map).fillna(df_baru.loc[is_masked_alamat, 'ALAMAT'])
 
     return df_baru
+
+
+# --- FUNGSI PEMBACA FILE UMUM TAHAP 1 & 2 ---
+def baca_ekstrak_tabel(uploaded_file):
+    ext = os.path.splitext(uploaded_file.name)[1].lower()
+    fname = uploaded_file.name
+    
+    if ext == '.xlsx':
+        df = pd.read_excel(uploaded_file)
+    else:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
+            tmp.write(uploaded_file.getvalue())
+            tmp_path = tmp.name
+
+        try:
+            if ext == '.dbf':
+                df = pd.DataFrame(iter(DBF(tmp_path, char_decode_errors='ignore')))
+            else:
+                st.error(f"Format tidak didukung di Tahap 1/2: {ext}")
+                return pd.DataFrame(), fname
+        finally:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+
+    df.columns = df.columns.astype(str).str.strip().str.upper()
+    # Logika Rename dikembalikan murni seperti di file Tkinter (menghindari duplikasi)
+    df = df.rename(columns={'KDDK': 'KOKED', 'TARIF': 'TARIP', 'NAMAPNJ': 'ALAMAT'})
+    
+    # Pencegahan error duplikasi jika DBF asli kotor
+    df = df.loc[:, ~df.columns.duplicated(keep='first')]
+    
+    return df, fname
+
+def proses_list_file(files, tipe_data):
+    list_df = []
+    for f in files:
+        df, fname = baca_ekstrak_tabel(f)
+        if df.empty: continue
+        
+        # Logika filter kolom dibelah agar akurat sesuai jenis datanya
+        if tipe_data == 'baru':
+            if 'ALAMAT' not in df.columns: df['ALAMAT'] = ''
+            for col in ['IDPEL', 'KOKED', 'TARIP', 'DAYA', 'NAMA']:
+                if col not in df.columns: raise ValueError(f"Kolom wajib '{col}' tidak ditemukan di Data Baru: {fname}")
+            df['IDPEL'] = df['IDPEL'].apply(clean_idpel)
+            df['DAYA'] = df['DAYA'].apply(clean_daya)
+            df['KOKED'] = df['KOKED'].astype(str).str.strip()
+            list_df.append(df[['IDPEL', 'KOKED', 'TARIP', 'DAYA', 'NAMA', 'ALAMAT']])
+            
+        elif tipe_data == 'lama':
+            if 'IDPEL' not in df.columns: raise ValueError(f"Kolom 'IDPEL' hilang di Data Lama: {fname}")
+            df['IDPEL'] = df['IDPEL'].apply(clean_idpel)
+            list_df.append(df[['IDPEL']])
+            
+        elif tipe_data == 'master':
+            if 'IDPEL' not in df.columns: raise ValueError(f"Kolom 'IDPEL' hilang di Master: {fname}")
+            for col in ['NAMA', 'ALAMAT', 'KOKED', 'TARIP']:
+                if col not in df.columns: df[col] = ''
+            if 'DAYA' not in df.columns: df['DAYA'] = 0
+            df['IDPEL'] = df['IDPEL'].apply(clean_idpel)
+            df['DAYA'] = df['DAYA'].apply(clean_daya)
+            df['KOKED'] = df['KOKED'].astype(str).str.strip()
+            list_df.append(df[['IDPEL', 'NAMA', 'ALAMAT', 'KOKED', 'TARIP', 'DAYA']])
+            
+        elif tipe_data == 'sup_pb':
+            if 'IDPEL' not in df.columns: raise ValueError(f"Kolom 'IDPEL' hilang di Data PB Baru: {fname}")
+            if 'NAMA' not in df.columns: df['NAMA'] = ''
+            if 'ALAMAT' not in df.columns: df['ALAMAT'] = ''
+            df['IDPEL'] = df['IDPEL'].apply(clean_idpel)
+            list_df.append(df[['IDPEL', 'NAMA', 'ALAMAT']])
+
+        elif tipe_data == 'petugas': # Untuk Tab 2
+            for col in ['ALAMAT', 'NAMA', 'TARIP', 'KOKED']:
+                if col not in df.columns: df[col] = ''
+            if 'DAYA' not in df.columns: df['DAYA'] = 0
+            if 'IDPEL' not in df.columns: raise ValueError(f"Kolom 'IDPEL' hilang di file {fname}")
+            df['IDPEL'] = df['IDPEL'].apply(clean_idpel)
+            df['DAYA'] = df['DAYA'].apply(clean_daya)
+            df['KOKED'] = df['KOKED'].astype(str).str.strip()
+            list_df.append(df[['IDPEL', 'KOKED', 'TARIP', 'DAYA', 'NAMA', 'ALAMAT']])
+
+    if not list_df: return pd.DataFrame()
+    return pd.concat(list_df, ignore_index=True).drop_duplicates(subset=['IDPEL'], keep='first').reset_index(drop=True)
+
+def to_excel_bytes(df):
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df.to_excel(writer, index=False)
+    return output.getvalue()
+
 
 # --- LOGIKA EKSTRAKSI TABEL PDF TIPE 1 (HYBRID) ---
 def get_pdf_tables_tipe1(page):
@@ -167,7 +257,6 @@ def process_standard_table(table):
 # --- FUNGSI NORMALISASI (HANYA DIGUNAKAN DI TAB 3) ---
 def find_target_column(col_name):
     col_clean = re.sub(r'[^A-Z0-9]', '', str(col_name).upper())
-    
     if 'NOPEL' in col_clean or 'IDPEL' in col_clean or 'IDPELANGGAN' in col_clean or col_clean == 'ID' or col_clean == 'IDPEL': return 'IDPEL'
     if 'NAMAPEMOHON' in col_clean or 'NAMA' in col_clean or 'PELANGGAN' in col_clean: return 'NAMA'
     if 'ALAMATPEMOHON' in col_clean or 'ALAMAT' in col_clean or 'LOKASI' in col_clean: return 'ALAMAT'
@@ -195,11 +284,9 @@ def separate_idpel_and_nama(df):
 def normalize_pdf_dataframe(df):
     if df is None or df.empty:
         return pd.DataFrame(columns=['IDPEL', 'NAMA', 'ALAMAT', 'TARIF', 'DAYA', 'GARDU', 'TIANG', 'KOKED'])
-
     new_cols = [find_target_column(c) for c in df.columns]
     df.columns = new_cols
     df = df.loc[:, ~df.columns.duplicated(keep='first')]
-
     if 'TARIF' in df.columns:
         for idx in df.index:
             t_val = str(df.at[idx, 'TARIF']).strip()
@@ -208,108 +295,26 @@ def normalize_pdf_dataframe(df):
                 df.at[idx, 'TARIF'] = parts[0].strip()
                 if len(parts) > 1 and (not 'DAYA' in df.columns or str(df.at[idx, 'DAYA']).strip() in ['', '0', '0.0']):
                     df.at[idx, 'DAYA'] = parts[1].strip()
-
     if 'IDPEL' in df.columns:
         id_idx = df.columns.get_loc('IDPEL')
         if 'NAMA' not in df.columns and id_idx + 1 < len(df.columns):
             col_name = df.columns[id_idx + 1]
             if col_name not in ['ALAMAT', 'TARIF', 'DAYA', 'GARDU', 'TIANG', 'KOKED']: df = df.rename(columns={col_name: 'NAMA'})
-        
         if 'NAMA' in df.columns and 'ALAMAT' not in df.columns:
             nama_idx = df.columns.get_loc('NAMA')
             if nama_idx + 1 < len(df.columns):
                 col_name = df.columns[nama_idx + 1]
                 if col_name not in ['TARIF', 'DAYA', 'GARDU', 'TIANG', 'KOKED']: df = df.rename(columns={col_name: 'ALAMAT'})
-
     df = separate_idpel_and_nama(df)
-
     target_cols = ['IDPEL', 'NAMA', 'ALAMAT', 'TARIF', 'DAYA', 'GARDU', 'TIANG', 'KOKED']
     for col in target_cols:
         if col not in df.columns: df[col] = ""
-
     df['IDPEL'] = df['IDPEL'].apply(clean_idpel)
     df['DAYA'] = df['DAYA'].apply(clean_daya)
     for col in ['NAMA', 'ALAMAT']: df[col] = df[col].astype(str).replace('nan', '').replace('None', '').str.strip()
     df = df[df['IDPEL'].astype(str).str.strip() != ''].copy()
-
     return df[target_cols].reset_index(drop=True)
 
-# --- FUNGSI PEMBACA FILE UMUM TAHAP 1 & 2 ---
-def baca_ekstrak_tabel(uploaded_file):
-    ext = os.path.splitext(uploaded_file.name)[1].lower()
-    fname = uploaded_file.name
-    
-    if ext == '.xlsx':
-        df = pd.read_excel(uploaded_file)
-    else:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
-            tmp.write(uploaded_file.getvalue())
-            tmp_path = tmp.name
-
-        try:
-            if ext == '.dbf':
-                df = pd.DataFrame(iter(DBF(tmp_path, char_decode_errors='ignore')))
-            else:
-                st.error(f"Format tidak didukung di Tahap 1/2: {ext}")
-                return pd.DataFrame(), fname
-        finally:
-            if os.path.exists(tmp_path):
-                os.remove(tmp_path)
-
-    df.columns = df.columns.astype(str).str.strip().str.upper()
-    df = df.rename(columns={'KDDK': 'KOKED', 'TARIF': 'TARIP', 'GOL TARIF': 'TARIP', 'NAMAPNJ': 'ALAMAT', 'ID PEL': 'IDPEL', 'ID_PELANGGAN': 'IDPEL', 'NOPEL': 'IDPEL'})
-    df = df.loc[:, ~df.columns.duplicated(keep='first')] # Mencegah error duplikasi kolom DBF
-    return df, fname
-
-def proses_list_file(files, tipe_data):
-    list_df = []
-    for f in files:
-        df, fname = baca_ekstrak_tabel(f)
-        if df.empty: continue
-        
-        if tipe_data in ['baru', 'petugas']:
-            for col in ['ALAMAT', 'NAMA', 'TARIP', 'KOKED']:
-                if col not in df.columns: df[col] = ''
-            if 'DAYA' not in df.columns: df['DAYA'] = 0
-            if 'IDPEL' not in df.columns: raise ValueError(f"Kolom 'IDPEL' hilang di file {fname}")
-                
-            df['IDPEL'] = df['IDPEL'].apply(clean_idpel)
-            df['DAYA'] = df['DAYA'].apply(clean_daya)
-            df['KOKED'] = df['KOKED'].astype(str).str.strip()
-            list_df.append(df[['IDPEL', 'KOKED', 'TARIP', 'DAYA', 'NAMA', 'ALAMAT']])
-            
-        elif tipe_data == 'lama':
-            if 'IDPEL' not in df.columns: raise ValueError(f"Kolom 'IDPEL' hilang di file: {fname}")
-            if 'KOKED' not in df.columns: df['KOKED'] = ''
-            df['IDPEL'] = df['IDPEL'].apply(clean_idpel)
-            df['KOKED'] = df['KOKED'].astype(str).str.strip()
-            list_df.append(df[['IDPEL', 'KOKED']])
-            
-        elif tipe_data == 'master':
-            if 'IDPEL' not in df.columns: raise ValueError(f"Kolom 'IDPEL' hilang di file: {fname}")
-            for col in ['NAMA', 'ALAMAT', 'KOKED', 'TARIP']:
-                if col not in df.columns: df[col] = ''
-            if 'DAYA' not in df.columns: df['DAYA'] = 0
-            df['IDPEL'] = df['IDPEL'].apply(clean_idpel)
-            df['DAYA'] = df['DAYA'].apply(clean_daya)
-            df['KOKED'] = df['KOKED'].astype(str).str.strip()
-            list_df.append(df[['IDPEL', 'NAMA', 'ALAMAT', 'KOKED', 'TARIP', 'DAYA']])
-            
-        elif tipe_data == 'sup_pb':
-            if 'IDPEL' not in df.columns: raise ValueError(f"Kolom 'IDPEL' hilang di file: {fname}")
-            if 'NAMA' not in df.columns: df['NAMA'] = ''
-            if 'ALAMAT' not in df.columns: df['ALAMAT'] = ''
-            df['IDPEL'] = df['IDPEL'].apply(clean_idpel)
-            list_df.append(df[['IDPEL', 'NAMA', 'ALAMAT']])
-
-    if not list_df: return pd.DataFrame()
-    return pd.concat(list_df, ignore_index=True).drop_duplicates(subset=['IDPEL'], keep='first').reset_index(drop=True)
-
-def to_excel_bytes(df):
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df.to_excel(writer, index=False)
-    return output.getvalue()
 
 # ==========================================
 # ANTARMUKA STREAMLIT
@@ -330,7 +335,7 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10 = st.tabs([
 ])
 
 # ==========================================
-# TAB 1: PERSIAPAN DATA (LOGIKA 100% SESUAI SCRIPT TKINTER)
+# TAB 1: PERSIAPAN DATA (SUDAH DISESUAIKAN DENGAN SCRIPT KEDUA)
 # ==========================================
 with tab1:
     st.header("Tahap 1: Memecah Data Untuk Petugas Lapangan")
@@ -368,6 +373,7 @@ with tab1:
                     df_pb = df_baru[~df_baru['IDPEL'].isin(list_idpel_lama)].copy().reset_index(drop=True)
                     df_tetap = df_baru[df_baru['IDPEL'].isin(list_idpel_lama)].copy().reset_index(drop=True)
 
+                    # PENGURUTAN MENGGUNAKAN KOKED (URUT 7:10)
                     for df in [df_pb, df_tetap]:
                         if not df.empty:
                             df['NO_URUT'] = df['KOKED'].astype(str).str[7:10]
@@ -382,7 +388,8 @@ with tab1:
                         # 5. EKSPORT REKAP PB SELURUH PETUGAS
                         if not df_pb.empty:
                             df_pb_clean = df_pb.drop_duplicates(subset=['IDPEL'], keep='first')
-                            zip_file.writestr("PB_SEMUA_PETUGAS.xlsx", to_excel_bytes(df_pb_clean[kolom_export]))
+                            pb_bytes = to_excel_bytes(df_pb_clean[kolom_export])
+                            zip_file.writestr("PB_SEMUA_PETUGAS.xlsx", pb_bytes)
 
                         # 6. BUAT & EKSPORT DATA MASTER TER-UPDATE
                         df_master_base = df_master[kolom_export].copy() if not df_master.empty else pd.DataFrame(columns=kolom_export)
