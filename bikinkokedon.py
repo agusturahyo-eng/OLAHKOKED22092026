@@ -8,6 +8,7 @@ import zipfile
 import tempfile
 import re
 import gc # Untuk garbage collection
+import openpyxl
 
 # Library PDF
 try:
@@ -61,8 +62,9 @@ def fix_masked_info(df_baru, df_master, df_sup_pb):
 
     if not nama_map and not alamat_map: return df_baru
 
-    is_masked_nama = df_baru['NAMA'].astype(str).str.contains(r'\*', na=False) | df_baru['NAMA'].isna() | (df_baru['NAMA'].astype(str).str.strip() == '')
-    is_masked_alamat = df_baru['ALAMAT'].astype(str).str.contains(r'\*', na=False) | df_baru['ALAMAT'].isna() | (df_baru['ALAMAT'].astype(str).str.strip() == '')
+    # PERBAIKAN: Penanganan nilai kosong yang lebih aman agar tidak memicu error Series ambiguous
+    is_masked_nama = df_baru['NAMA'].astype(str).str.contains(r'\*', na=False) | df_baru['NAMA'].isna() | (df_baru['NAMA'].astype(str).str.strip() == '') | df_baru['NAMA'].astype(str).str.strip().isin(['nan', 'None'])
+    is_masked_alamat = df_baru['ALAMAT'].astype(str).str.contains(r'\*', na=False) | df_baru['ALAMAT'].isna() | (df_baru['ALAMAT'].astype(str).str.strip() == '') | df_baru['ALAMAT'].astype(str).str.strip().isin(['nan', 'None'])
 
     df_baru.loc[is_masked_nama, 'NAMA'] = df_baru.loc[is_masked_nama, 'IDPEL'].map(nama_map).fillna(df_baru.loc[is_masked_nama, 'NAMA'])
     df_baru.loc[is_masked_alamat, 'ALAMAT'] = df_baru.loc[is_masked_alamat, 'IDPEL'].map(alamat_map).fillna(df_baru.loc[is_masked_alamat, 'ALAMAT'])
@@ -139,7 +141,6 @@ def process_standard_table(table):
         val = str(h).strip() if str(h).strip() != "" else f"KOLOM_{i+1}"
         headers.append(val)
         
-    # --- ANTI-ERROR REINDEXING: Memastikan tidak ada nama kolom yang duplikat ---
     seen = set()
     unique_headers = []
     for h in headers:
@@ -248,6 +249,10 @@ def baca_ekstrak_tabel(uploaded_file):
 
     df.columns = df.columns.astype(str).str.strip().str.upper()
     df = df.rename(columns={'KDDK': 'KOKED', 'TARIF': 'TARIP', 'GOL TARIF': 'TARIP', 'NAMAPNJ': 'ALAMAT', 'ID PEL': 'IDPEL', 'ID_PELANGGAN': 'IDPEL', 'NOPEL': 'IDPEL'})
+    
+    # PERBAIKAN: Menghapus kolom duplikat setelah rename agar tidak menyebabkan ambigu di Tab 1
+    df = df.loc[:, ~df.columns.duplicated(keep='first')]
+    
     return df, fname
 
 def proses_list_file(files, tipe_data):
@@ -825,9 +830,6 @@ with tab7:
 # ==========================================
 # TAB 8: UPDATE MASTER DATA (VERSI 2)
 # ==========================================
-import numpy as np
-import openpyxl
-
 with tab8:
     st.header("Tahap 8: Update Master Data Pelanggan (Versi 2)")
     st.write("Mengisi kolom yang KOSONG di Data Lama dengan data dari Data Baru berdasarkan IDPEL. TIDAK MENAMBAH KOLOM BARU dan data yang sudah terisi TIDAK akan ditimpa.")
@@ -943,8 +945,6 @@ with tab8:
 # ==========================================
 # TAB 9: ISI PETUGAS (BERDASARKAN DAYA, IDPEL, & KOKED/KDDK)
 # ==========================================
-import openpyxl
-
 with tab9:
     st.header("Tahap 9: Penentuan Petugas Otomatis")
     st.write("Mengisi kolom Petugas secara otomatis berdasarkan logika Daya > 33000 (PLN), IDPEL khusus, dan 3 karakter tengah KOKED/KDDK.")
@@ -1071,12 +1071,6 @@ with tab9:
 # ==========================================
 # TAB 10: SPLIT DATA MENJADI MULTIPLE WORKSHEET / FILES
 # ==========================================
-import re
-import zipfile
-import io
-import pandas as pd
-import openpyxl
-
 with tab10:
     st.header("Tahap 10: Split Data ke Beberapa Worksheet atau File")
     st.write("Membagi satu tabel data menjadi beberapa worksheet (sheet) atau file Excel terpisah berdasarkan nilai pada kolom tertentu.")
@@ -1207,6 +1201,9 @@ with tab10:
                             mime="application/zip",
                             key="t10_download_zip"
                         )
+
+        except Exception as e:
+            st.error(f"❌ Terjadi kesalahan saat memproses data: {e}")
 
         except Exception as e:
             st.error(f"❌ Terjadi kesalahan saat memproses data: {e}")
