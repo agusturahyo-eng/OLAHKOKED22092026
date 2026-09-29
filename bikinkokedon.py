@@ -339,7 +339,7 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10 = st.tabs([
 # ==========================================
 with tab1:
     st.header("Tahap 1: Memecah Data Untuk Petugas Lapangan")
-    st.markdown("Digunakan untuk membuat data perpetugas buat koked, data pelanggan baru, dan data master)
+    st.markdown("Digunakan untuk membuat data perpetugas buat koked, data pelanggan baru, dan data master")
     col1, col2 = st.columns(2)
     with col1:
         files_baru = st.file_uploader("[Tahap 1] Data Server Bulan INI", accept_multiple_files=True, key="t1_baru")
