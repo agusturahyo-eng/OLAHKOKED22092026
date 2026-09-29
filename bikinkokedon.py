@@ -339,6 +339,7 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10 = st.tabs([
 # ==========================================
 with tab1:
     st.header("Tahap 1: Memecah Data Untuk Petugas Lapangan")
+    st.markdown("Digunakan untuk membuat data perpetugas buat koked, data pelanggan baru, dan data master)
     col1, col2 = st.columns(2)
     with col1:
         files_baru = st.file_uploader("[Tahap 1] Data Server Bulan INI", accept_multiple_files=True, key="t1_baru")
@@ -453,6 +454,7 @@ with tab1:
 # ==========================================
 with tab2:
     st.header("Tahap 2: Gabung File Petugas & Mutasi KOKED")
+    st.markdown("Digunakan untuk membuat hasil koked untuk di upload di PLN")
     col3, col4 = st.columns(2)
     with col3: files_petugas = st.file_uploader("[Tahap 2] Data Hasil Kerja Petugas", accept_multiple_files=True, key="t2_petugas")
     with col4: files_lama_pembanding = st.file_uploader("[Tahap 2] Data Bulan Lalu", accept_multiple_files=True, key="t2_lama")
