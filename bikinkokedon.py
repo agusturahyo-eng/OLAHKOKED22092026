@@ -809,6 +809,7 @@ with tab6:
 # ==========================================
 with tab7:
     st.header("Tahap 7: Info Data & Lokasi Pelanggan")
+    st.markdown("Digunakan untuk mencari data pelanggan berdasar idpel, nama, nomormeter")
     
     SUPABASE_URL = "https://wnzedfyiublmzmjkzsrq.supabase.co" 
     SUPABASE_KEY = "sb_publishable_g1WlECVLkTdNBMwL2QxWlA_gOu6l4VR"
