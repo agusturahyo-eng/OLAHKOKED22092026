@@ -1,33 +1,24 @@
 import streamlit as st
 
-# Inisialisasi status login
+# 1. Inisialisasi status login
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
 
-# Jika belum login, tampilkan form password
+# 2. Jika BELUM login, tampilkan form
 if not st.session_state.authenticated:
     st.title("Aplikasi Terkunci 🔒")
     password = st.text_input("Masukkan Password:", type="password")
     
     if st.button("Masuk"):
-        # Ganti "rahasia123" dengan password yang Anda inginkan
-        if password == "Tlg@1234":
+        if password == "Tlg@1234":  # Ganti dengan password Anda
             st.session_state.authenticated = True
-            st.rerun() # Refresh halaman untuk masuk ke aplikasi
+            st.rerun()
         else:
             st.error("Password salah!")
-
-# Jika sudah login, tampilkan aplikasi utama
-if st.session_state.authenticated:
-    # --- MASUKKAN KODE UTAMA APLIKASI ANDA DI BAWAH INI ---
-    
-    st.title("Selamat Datang di Aplikasi Utama! 🎉")
-    st.write("Hanya orang yang tahu password yang bisa melihat halaman ini.")
-    
-    # Tombol Logout (opsional)
-    if st.button("Keluar"):
-        st.session_state.authenticated = False
-        st.rerun()
+            
+    # HENTIKAN aplikasi di sini jika belum login. 
+    # Kode di bawah baris ini tidak akan dibaca.
+    st.stop()
         
 import streamlit as st
 import pandas as pd
