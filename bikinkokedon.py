@@ -1,4 +1,35 @@
 import streamlit as st
+
+# Inisialisasi status login
+if "authenticated" not in st.session_state:
+    st.session_state.authenticated = False
+
+# Jika belum login, tampilkan form password
+if not st.session_state.authenticated:
+    st.title("Aplikasi Terkunci 🔒")
+    password = st.text_input("Masukkan Password:", type="password")
+    
+    if st.button("Masuk"):
+        # Ganti "rahasia123" dengan password yang Anda inginkan
+        if password == "Tlg@1234":
+            st.session_state.authenticated = True
+            st.rerun() # Refresh halaman untuk masuk ke aplikasi
+        else:
+            st.error("Password salah!")
+
+# Jika sudah login, tampilkan aplikasi utama
+if st.session_state.authenticated:
+    # --- MASUKKAN KODE UTAMA APLIKASI ANDA DI BAWAH INI ---
+    
+    st.title("Selamat Datang di Aplikasi Utama! 🎉")
+    st.write("Hanya orang yang tahu password yang bisa melihat halaman ini.")
+    
+    # Tombol Logout (opsional)
+    if st.button("Keluar"):
+        st.session_state.authenticated = False
+        st.rerun()
+        
+import streamlit as st
 import pandas as pd
 import numpy as np
 from dbfread import DBF
