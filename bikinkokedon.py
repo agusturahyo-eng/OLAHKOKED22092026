@@ -46,7 +46,7 @@ def filter_watermark_obj(obj):
         # 1. Buang huruf yang posisinya miring/dirotasi (watermark diagonal)
         if not obj.get("upright", True):
             return False
-        # 2. Buang huruf yang ukurannya terlalu besar (watermark biasanya > 14pt, sedangkan isi tabel 6-10pt)
+        # 2. Buang huruf yang ukurannya terlalu besar (watermark > 14pt)
         if obj.get("size", 0) > 14:
             return False
     return True
@@ -207,17 +207,6 @@ def to_excel_bytes(df):
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         df.to_excel(writer, index=False)
-    return output.getvalue()
-
-# Fungsi pembuat Excel khusus data sangat besar (Hemat RAM 80% dengan write_only)
-def to_excel_bytes_light(df):
-    output = io.BytesIO()
-    wb = openpyxl.Workbook(write_only=True)
-    ws = wb.create_sheet(title="Data")
-    ws.append(list(df.columns))
-    for row in df.itertuples(index=False, name=None):
-        ws.append(list(row))
-    wb.save(output)
     return output.getvalue()
 
 
@@ -620,11 +609,11 @@ with tab3:
                 st.warning("⚠️ Tidak ada data tabel yang terdeteksi.")
 
 # ==========================================
-# TAB 4: IMPORT & EKSTRAK PDF (TIPE 2 - ANTI CRASH & TANPA WATERMARK)
+# TAB 4: IMPORT & EKSTRAK PDF (TIPE 2 - DIRECT-TO-DISK STREAMING ANTI CRASH)
 # ==========================================
 with tab4:
     st.header("Tahap 4: Import & Ekstrak PDF (Tipe 2 - Semua Kolom)")
-    st.markdown("Digunakan untuk format PDF standar. **Mengekspor semua kolom utuh apa adanya (Otomatis Membuang Watermark).**")
+    st.markdown("Digunakan untuk format PDF standar. **Mengekspor semua kolom utuh apa adanya (Mode Direct-to-Disk Anti-Crash & Tanpa Watermark).**")
     pdf_files_t2 = st.file_uploader("Upload File PDF Tipe 2", type=['pdf'], accept_multiple_files=True, key="t4_pdf")
 
     if st.button("Proses & Ekstrak Semua Data (Tipe 2)", type="primary"):
@@ -633,47 +622,80 @@ with tab4:
         elif not PDF_SUPPORT: 
             st.error("Library `pdfplumber` belum di-install.")
         else:
-            all_rows = [] # Menyimpan baris mentah (jauh lebih ringan daripada ratusan DataFrame)
             error_pages = [] 
             master_headers = None
+            preview_rows = []
+            total_baris = 0
             
-            with st.spinner("🚀 Sedang mengekstraksi PDF besar & membersihkan watermark..."):
+            # Siapkan file Excel sementara langsung di Disk (BUKAN di RAM!)
+            tmp_excel = tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx')
+            tmp_excel_path = tmp_excel.name
+            tmp_excel.close()
+            
+            wb = openpyxl.Workbook(write_only=True)
+            ws = wb.create_sheet(title="Data")
+            header_written = False
+            
+            with st.spinner("🚀 Mengekstraksi PDF langsung ke Disk (RAM Dijamin Aman)..."):
                 progress_bar = st.progress(0)
                 status_text = st.empty()
                 total_files = len(pdf_files_t2)
 
                 for f_idx, uploaded_pdf in enumerate(pdf_files_t2):
                     fname = uploaded_pdf.name
-                    with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp: 
-                        tmp.write(uploaded_pdf.read()) # .read() lebih hemat RAM daripada .getvalue()
-                        tmp_path = tmp.name
                     
-                    # Kembalikan pointer file & bersihkan RAM sebelum buka PDF
+                    # Salin file PDF ke disk per potongan kecil (1 MB) agar RAM tidak melonjak
+                    with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_pdf:
+                        uploaded_pdf.seek(0)
+                        while True:
+                            chunk = uploaded_pdf.read(1024 * 1024)
+                            if not chunk:
+                                break
+                            tmp_pdf.write(chunk)
+                        tmp_path = tmp_pdf.name
+                    
                     uploaded_pdf.seek(0)
                     gc.collect()
                         
                     try:
-                        with pdfplumber.open(tmp_path) as pdf:
-                            total_pages = len(pdf.pages)
+                        # Cek total halaman terlebih dahulu lalu tutup
+                        with pdfplumber.open(tmp_path) as pdf_check:
+                            total_pages = len(pdf_check.pages)
+                        
+                        # Proses PDF per 25 halaman (Chunking) lalu tutup paksa pdfplumber
+                        # Ini memaksa pdfminer membuang 100% cache huruf dari RAM!
+                        CHUNK_SIZE = 25
+                        for start_idx in range(0, total_pages, CHUNK_SIZE):
+                            end_idx = min(start_idx + CHUNK_SIZE, total_pages)
                             
-                            for i, page in enumerate(pdf.pages):
-                                try:
-                                    # Bersihkan watermark diagonal/besar sebelum ekstrak tabel!
-                                    clean_p = bersihkan_halaman_pdf(page)
-                                    tables = clean_p.extract_tables() 
-                                    for table in tables:
-                                        rows, master_headers = extract_rows_standard(table, master_headers)
-                                        if rows: 
-                                            all_rows.extend(rows)
-                                except Exception as e:
-                                    error_pages.append(f"{fname} - Hal {i+1}: {str(e)}")
-                                finally:
-                                    page.flush_cache() 
-                                
-                                if (i + 1) % 10 == 0 or (i + 1) == total_pages:
-                                    progress_bar.progress((i + 1) / total_pages)
-                                    status_text.text(f"File {f_idx+1}/{total_files} ({fname}): Memproses halaman {i+1} dari {total_pages}...")
-                                    gc.collect()
+                            with pdfplumber.open(tmp_path) as pdf:
+                                for i in range(start_idx, end_idx):
+                                    page = pdf.pages[i]
+                                    try:
+                                        clean_p = bersihkan_halaman_pdf(page)
+                                        tables = clean_p.extract_tables() 
+                                        for table in tables:
+                                            rows, master_headers = extract_rows_standard(table, master_headers)
+                                            if rows and master_headers:
+                                                if not header_written:
+                                                    ws.append(list(master_headers))
+                                                    header_written = True
+                                                for r in rows:
+                                                    ws.append(list(r))
+                                                    total_baris += 1
+                                                    if len(preview_rows) < 50:
+                                                        preview_rows.append(r)
+                                    except Exception as e:
+                                        error_pages.append(f"{fname} - Hal {i+1}: {str(e)}")
+                                    finally:
+                                        page.flush_cache()
+                                        if 'clean_p' in locals():
+                                            clean_p.flush_cache()
+                            
+                            # Setelah 25 halaman selesai dan blok 'with' tertutup, kuras RAM!
+                            progress_bar.progress(end_idx / total_pages)
+                            status_text.text(f"File {f_idx+1}/{total_files} ({fname}): Selesai memproses halaman {end_idx} dari {total_pages} (Total: {total_baris} baris)...")
+                            gc.collect()
                                 
                     except Exception as e:
                         st.error(f"Gagal membuka file {fname}: {str(e)}")
@@ -682,29 +704,16 @@ with tab4:
                             os.remove(tmp_path)
                         gc.collect()
 
-            if all_rows and master_headers:
-                try:
-                    status_text.text("Menyusun tabel & mengonversi ke Excel (Mode Ringan)...")
-                    final_pdf_df = pd.DataFrame(all_rows, columns=master_headers)
-                    
-                    # Langsung hapus list mentah dari RAM!
-                    del all_rows
-                    gc.collect()
-                    
-                    total_baris = len(final_pdf_df)
-                    total_kolom = len(final_pdf_df.columns)
-                    
-                    # Simpan 50 baris saja untuk ditampilkan di layar
-                    preview_df = final_pdf_df.head(50).copy()
-                    
-                    # Konversi ke Excel dengan mode write_only (Hemat RAM 80%)
-                    excel_bytes = to_excel_bytes_light(final_pdf_df)
-                    
-                    # Hapus DataFrame utama yang besar dari RAM sebelum render UI Streamlit!
-                    del final_pdf_df
-                    gc.collect()
+            # Tutup & simpan file Excel di Disk
+            wb.close()
+            wb.save(tmp_excel_path)
+            del wb
+            gc.collect()
 
+            if total_baris > 0 and master_headers:
+                try:
                     status_text.empty()
+                    total_kolom = len(master_headers)
                     st.success(f"✅ Berhasil mengekstraksi {total_baris} baris dengan {total_kolom} kolom bersih tanpa watermark dari {total_files} file!")
                     
                     if error_pages:
@@ -712,19 +721,27 @@ with tab4:
                         with st.expander("Lihat Detail Error"):
                             for err in error_pages: st.write(err)
 
+                    preview_df = pd.DataFrame(preview_rows, columns=master_headers)
                     st.dataframe(preview_df, use_container_width=True)
                     
-                    st.download_button(
-                        "📥 Download Semua Data Tipe 2 (.xlsx)", 
-                        data=excel_bytes, 
-                        file_name="Hasil_Semua_Kolom_Tipe2.xlsx", 
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", 
-                        type="primary"
-                    )
+                    # Buka file hasil dari Disk untuk tombol Download
+                    with open(tmp_excel_path, "rb") as f_excel:
+                        st.download_button(
+                            "📥 Download Semua Data Tipe 2 (.xlsx)", 
+                            data=f_excel, 
+                            file_name="Hasil_Semua_Kolom_Tipe2.xlsx", 
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", 
+                            type="primary"
+                        )
                 except Exception as e:
                     st.error(f"Gagal saat menyiapkan file unduhan: {str(e)}")
+                finally:
+                    if os.path.exists(tmp_excel_path):
+                        os.remove(tmp_excel_path)
             else:
-                st.warning("⚠ Tidak ada data tabel yang terdeteksi.")
+                if os.path.exists(tmp_excel_path):
+                    os.remove(tmp_excel_path)
+                st.warning("⚠️ Tidak ada data tabel yang terdeteksi.")
 
 # ==========================================
 # TAB 5: PARSING BANYAK FILE ICONPRN KE EXCEL
