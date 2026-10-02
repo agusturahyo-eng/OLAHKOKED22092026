@@ -478,28 +478,49 @@ with tab2:
     st.header("Tahap 2: Gabung File Petugas & Mutasi KOKED")
     st.markdown("Digunakan untuk membuat hasil koked untuk di upload di PLN")
     col3, col4 = st.columns(2)
-    with col3: files_petugas = st.file_uploader("[Tahap 2] Data Hasil Kerja Petugas", accept_multiple_files=True, key="t2_petugas")
-    with col4: files_lama_pembanding = st.file_uploader("[Tahap 2] Data Bulan Lalu", accept_multiple_files=True, key="t2_lama")
+    with col3: 
+        files_petugas = st.file_uploader("[Tahap 2] Data Hasil Kerja Petugas", accept_multiple_files=True, key="t2_petugas")
+    with col4: 
+        files_lama_pembanding = st.file_uploader("[Tahap 2] Data Master / Bulan Sekarang", accept_multiple_files=True, key="t2_lama")
 
     if st.button("Proses Tahap 2", type="primary"):
-        if not files_petugas or not files_lama_pembanding: st.error("Silakan unggah Data Hasil Kerja Petugas dan Data Bulan Lalu.")
+        if not files_petugas or not files_lama_pembanding: 
+            st.error("Silakan unggah Data Hasil Kerja Petugas dan Data Master / Bulan Sekarang.")
         else:
             with st.spinner("Membandingkan KOKED..."):
                 try:
                     df_petugas = proses_list_file(files_petugas, 'petugas')
                     df_lama_pem = proses_list_file(files_lama_pembanding, 'lama')
 
-                    df_compare = df_petugas[['IDPEL', 'KOKED']].merge(df_lama_pem[['IDPEL', 'KOKED']], on='IDPEL', suffixes=('_BARU', '_LAMA'))
+                    # --- PENYERAGAMAN NAMA KOLOM OTOMATIS ---
+                    df_petugas.columns = df_petugas.columns.astype(str).str.strip().str.upper()
+                    df_lama_pem.columns = df_lama_pem.columns.astype(str).str.strip().str.upper()
+
+                    # Ubah KDDK -> KOKED dan TARIP -> TARIF (pakai F)
+                    df_petugas.rename(columns={'KDDK': 'KOKED', 'TARIP': 'TARIF'}, inplace=True)
+                    df_lama_pem.rename(columns={'KDDK': 'KOKED', 'TARIP': 'TARIF'}, inplace=True)
+                    # ----------------------------------------
+
+                    df_compare = df_petugas[['IDPEL', 'KOKED']].merge(
+                        df_lama_pem[['IDPEL', 'KOKED']], 
+                        on='IDPEL', 
+                        suffixes=('_BARU', '_LAMA')
+                    )
                     df_changed = df_compare[(df_compare['KOKED_BARU'] != df_compare['KOKED_LAMA']) & (df_compare['KOKED_LAMA'] != '')]
                     
                     df_petugas['NO_URUT'] = pd.to_numeric(df_petugas['KOKED'].str[7:10], errors='coerce').fillna(0).astype(int)
                     df_petugas.sort_values(by=['KOKED', 'NO_URUT'], inplace=True)
 
+                    # Pastikan kolom wajib tersedia sebelum diekspor ke Excel
+                    for col in ['IDPEL', 'KOKED', 'NAMA', 'ALAMAT', 'TARIF', 'DAYA']:
+                        if col not in df_petugas.columns:
+                            df_petugas[col] = ''
+
                     zip_buffer2 = io.BytesIO()
                     with zipfile.ZipFile(zip_buffer2, "w", zipfile.ZIP_DEFLATED) as zip_file2:
                         if not df_changed.empty:
                             zip_file2.writestr("PERUBAHAN_KOKED.txt", "\n".join((df_changed['IDPEL'].astype(str) + "|" + df_changed['KOKED_BARU'].astype(str)).tolist()))
-                        zip_file2.writestr("DATA_GABUNGAN_FINAL.xlsx", to_excel_bytes(df_petugas[['IDPEL', 'KOKED', 'NAMA', 'ALAMAT', 'TARIP', 'DAYA']]))
+                        zip_file2.writestr("DATA_GABUNGAN_FINAL.xlsx", to_excel_bytes(df_petugas[['IDPEL', 'KOKED', 'NAMA', 'ALAMAT', 'TARIF', 'DAYA']]))
 
                     st.success(f"✅ Selesai! {len(df_changed)} data mutasi KOKED.")
                     st.download_button("📥 Download Hasil Akhir (.zip)", data=zip_buffer2.getvalue(), file_name="Hasil_Koked.zip", mime="application/zip", type="primary")
