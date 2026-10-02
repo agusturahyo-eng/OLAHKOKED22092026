@@ -1,4 +1,17 @@
 import streamlit as st
+import pandas as pd
+import numpy as np
+from dbfread import DBF
+import os
+import io
+import zipfile
+import tempfile
+import re
+import gc # Untuk garbage collection
+import openpyxl
+
+# --- PENGATURAN HALAMAN (WAJIB PALING ATAS DI STREAMLIT) ---
+st.set_page_config(page_title="Aplikasi Olah Data & Ekstrak PDF", layout="wide")
 
 # 1. Inisialisasi status login
 if "authenticated" not in st.session_state:
@@ -19,17 +32,6 @@ if not st.session_state.authenticated:
     # HENTIKAN aplikasi di sini jika belum login. 
     # Kode di bawah baris ini tidak akan dibaca.
     st.stop()
-        
-import streamlit as st
-import pandas as pd
-import numpy as np
-from dbfread import DBF
-import os
-import io
-import zipfile
-import tempfile
-import re
-import gc # Untuk garbage collection
 
 # Library PDF
 try:
@@ -37,9 +39,6 @@ try:
     PDF_SUPPORT = True
 except ImportError:
     PDF_SUPPORT = False
-
-# --- PENGATURAN HALAMAN ---
-st.set_page_config(page_title="Aplikasi Olah Data & Ekstrak PDF", layout="wide")
 
 # --- FUNGSI MEMBERSIHKAN DAYA & IDPEL (100% SAMA DENGAN TKINTER) ---
 def clean_daya(val):
@@ -150,9 +149,12 @@ def proses_list_file(files, tipe_data):
             list_df.append(df[['IDPEL', 'KOKED', 'TARIP', 'DAYA', 'NAMA', 'ALAMAT']])
             
         elif tipe_data == 'lama':
-            if 'IDPEL' not in df.columns: raise ValueError(f"Kolom 'IDPEL' hilang di Data Lama: {fname}")
+            if 'IDPEL' not in df.columns: raise ValueError(f"Kolom 'IDPEL' hilang di Data Lama/Pembanding: {fname}")
+            if 'KOKED' not in df.columns: df['KOKED'] = ''
             df['IDPEL'] = df['IDPEL'].apply(clean_idpel)
-            list_df.append(df[['IDPEL']])
+            df['KOKED'] = df['KOKED'].astype(str).str.strip()
+            # Menyertakan KOKED agar Tahap 2 bisa membandingkan KOKED (tidak mengganggu Tahap 1)
+            list_df.append(df[['IDPEL', 'KOKED']])
             
         elif tipe_data == 'master':
             if 'IDPEL' not in df.columns: raise ValueError(f"Kolom 'IDPEL' hilang di Master: {fname}")
@@ -933,8 +935,6 @@ with tab7:
 # ==========================================
 # TAB 8: UPDATE MASTER DATA (VERSI 2)
 # ==========================================
-import openpyxl
-
 with tab8:
     st.header("Tahap 8: Update Master Data Pelanggan (Versi 2)")
     st.write("Mengisi kolom yang KOSONG di Data Lama dengan data dari Data Baru berdasarkan IDPEL. TIDAK MENAMBAH KOLOM BARU dan data yang sudah terisi TIDAK akan ditimpa.")
