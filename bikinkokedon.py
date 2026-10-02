@@ -240,43 +240,64 @@ def process_hybrid_table(table):
     df = pd.DataFrame(merged_rows[header_index+1:], columns=headers)
     return df
 
-# --- LOGIKA EKSTRAKSI TABEL PDF TIPE 2 (DEFAULT & ALL COLUMNS) ---
-def process_standard_table(table):
-    if not table or len(table) < 2: return None
+# --- LOGIKA EKSTRAKSI TABEL PDF TIPE 2 (DEFAULT & ALL COLUMNS - ANTI BENGKAK KOLOM) ---
+def process_standard_table(table, master_headers=None):
+    if not table or len(table) < 1: return None, master_headers
     
     cleaned_table = []
     for row in table:
         cleaned_row = [str(cell).replace('\n', ' ').strip() if cell and str(cell) != 'None' else "" for cell in row]
         if any(cleaned_row): cleaned_table.append(cleaned_row)
 
-    if len(cleaned_table) < 2: return None
+    if not cleaned_table: return None, master_headers
 
-    header_index = 0
-    header_keywords = ['ID PEL', 'IDPEL', 'NOPEL', 'NAMA', 'ALAMAT', 'NO', 'URUT', 'TANGGAL']
+    header_index = -1
+    header_keywords = ['ID PEL', 'IDPEL', 'NOPEL', 'NAMA', 'ALAMAT', 'THBLREK', 'KDDK', 'KODERBM', 'STAND', 'TARIF']
     for idx, row in enumerate(cleaned_table[:5]):
         row_str = " ".join([str(c).upper() for c in row])
-        if any(kw in row_str for kw in header_keywords):
+        # Minimal cocok 2 kata kunci agar baris data pelanggan tidak dikira header
+        matches = sum(1 for kw in header_keywords if kw in row_str)
+        if matches >= 2:
             header_index = idx
             break
 
-    headers = []
-    for i, h in enumerate(cleaned_table[header_index]):
-        val = str(h).strip() if str(h).strip() != "" else f"KOLOM_{i+1}"
-        headers.append(val)
+    # Jika di halaman ini ditemukan header tabel:
+    if header_index != -1:
+        headers = []
+        for i, h in enumerate(cleaned_table[header_index]):
+            val = str(h).strip().upper() if str(h).strip() != "" else f"KOLOM_{i+1}"
+            headers.append(val)
+            
+        seen = set()
+        unique_headers = []
+        for h in headers:
+            new_h = h
+            counter = 1
+            while new_h in seen:
+                new_h = f"{h}_{counter}" 
+                counter += 1
+            seen.add(new_h)
+            unique_headers.append(new_h)
+            
+        data_rows = cleaned_table[header_index+1:]
+        if master_headers is None:
+            master_headers = unique_headers
+    else:
+        # Jika halaman lanjutan TIDAK punya header, gunakan master_headers dari halaman 1
+        data_rows = cleaned_table
+        if master_headers is not None and len(cleaned_table[0]) == len(master_headers):
+            unique_headers = master_headers
+        else:
+            unique_headers = [f"KOLOM_{i+1}" for i in range(len(cleaned_table[0]))]
+
+    if not data_rows: return None, master_headers
+    
+    # Samakan jumlah kolom baris data dengan panjang header agar tidak error
+    num_cols = len(unique_headers)
+    normalized_rows = [r[:num_cols] + [""] * max(0, num_cols - len(r)) for r in data_rows]
         
-    seen = set()
-    unique_headers = []
-    for h in headers:
-        new_h = h
-        counter = 1
-        while new_h in seen:
-            new_h = f"{h}_{counter}" 
-            counter += 1
-        seen.add(new_h)
-        unique_headers.append(new_h)
-        
-    df = pd.DataFrame(cleaned_table[header_index+1:], columns=unique_headers)
-    return df
+    df = pd.DataFrame(normalized_rows, columns=unique_headers)
+    return df, master_headers
 
 # --- FUNGSI NORMALISASI (HANYA DIGUNAKAN DI TAB 3) ---
 def find_target_column(col_name):
@@ -568,7 +589,7 @@ with tab3:
                 st.warning("⚠️ Tidak ada data tabel yang terdeteksi.")
 
 # ==========================================
-# TAB 4: IMPORT & EKSTRAK PDF (TIPE 2)
+# TAB 4: IMPORT & EKSTRAK PDF (TIPE 2 - HEMAT RAM)
 # ==========================================
 with tab4:
     st.header("Tahap 4: Import & Ekstrak PDF (Tipe 2 - Semua Kolom)")
@@ -583,6 +604,7 @@ with tab4:
         else:
             all_extracted_dfs = []
             error_pages = [] 
+            master_headers = None # Pengunci kolom agar tidak bengkak jadi ribuan kolom
             
             with st.spinner("🚀 Sedang mengekstraksi PDF besar..."):
                 for uploaded_pdf in pdf_files_t2:
@@ -600,7 +622,7 @@ with tab4:
                                 try:
                                     tables = page.extract_tables() 
                                     for table in tables:
-                                        df_std = process_standard_table(table)
+                                        df_std, master_headers = process_standard_table(table, master_headers)
                                         if df_std is not None and not df_std.empty: 
                                             all_extracted_dfs.append(df_std)
                                 except Exception as e:
@@ -621,12 +643,19 @@ with tab4:
 
             if all_extracted_dfs:
                 try:
+                    status_text.text("Menggabungkan tabel dan menyiapkan file unduhan...")
                     final_pdf_df = pd.concat(all_extracted_dfs, ignore_index=True)
+                    
+                    # Bersihkan memori list sementara segera setelah digabung!
+                    del all_extracted_dfs
+                    gc.collect()
                     
                     if len(final_pdf_df.columns) > 0:
                         first_col = final_pdf_df.columns[0]
                         final_pdf_df = final_pdf_df[final_pdf_df[first_col] != first_col]
                     
+                    # Hapus kolom yang 100% kosong (jaga-jaga jika ada kolom nyasar)
+                    final_pdf_df = final_pdf_df.replace("", np.nan).dropna(axis=1, how='all').fillna("")
                     final_pdf_df = final_pdf_df.reset_index(drop=True)
 
                     st.success(f"✅ Berhasil mengekstraksi {len(final_pdf_df)} baris dengan {len(final_pdf_df.columns)} kolom utuh!")
@@ -637,7 +666,18 @@ with tab4:
                             for err in error_pages: st.write(err)
 
                     st.dataframe(final_pdf_df.head(50), use_container_width=True)
-                    st.download_button("📥 Download Semua Data Tipe 2 (.xlsx)", data=to_excel_bytes(final_pdf_df), file_name="Hasil_Semua_Kolom_Tipe2.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", type="primary")
+                    
+                    # Buat file Excel di memori lalu bersihkan sampah memori
+                    excel_bytes = to_excel_bytes(final_pdf_df)
+                    gc.collect()
+                    
+                    st.download_button(
+                        "📥 Download Semua Data Tipe 2 (.xlsx)", 
+                        data=excel_bytes, 
+                        file_name="Hasil_Semua_Kolom_Tipe2.xlsx", 
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", 
+                        type="primary"
+                    )
                 except Exception as e:
                     st.error(f"Gagal saat menggabungkan data: {str(e)}")
             else:
