@@ -40,6 +40,23 @@ try:
 except ImportError:
     PDF_SUPPORT = False
 
+# --- FUNGSI FILTER WATERMARK PDF (MEMBUANG TEKS MIRING & UKURAN BESAR) ---
+def filter_watermark_obj(obj):
+    if obj.get("object_type") == "char":
+        # 1. Buang huruf yang posisinya miring/dirotasi (watermark diagonal)
+        if not obj.get("upright", True):
+            return False
+        # 2. Buang huruf yang ukurannya terlalu besar (watermark biasanya > 14pt, sedangkan isi tabel 6-10pt)
+        if obj.get("size", 0) > 14:
+            return False
+    return True
+
+def bersihkan_halaman_pdf(page):
+    try:
+        return page.filter(filter_watermark_obj)
+    except Exception:
+        return page
+
 # --- FUNGSI MEMBERSIHKAN DAYA & IDPEL (100% SAMA DENGAN TKINTER) ---
 def clean_daya(val):
     if pd.isna(val): return 0.0
@@ -192,16 +209,28 @@ def to_excel_bytes(df):
         df.to_excel(writer, index=False)
     return output.getvalue()
 
+# Fungsi pembuat Excel khusus data sangat besar (Hemat RAM 80% dengan write_only)
+def to_excel_bytes_light(df):
+    output = io.BytesIO()
+    wb = openpyxl.Workbook(write_only=True)
+    ws = wb.create_sheet(title="Data")
+    ws.append(list(df.columns))
+    for row in df.itertuples(index=False, name=None):
+        ws.append(list(row))
+    wb.save(output)
+    return output.getvalue()
+
 
 # --- LOGIKA EKSTRAKSI TABEL PDF TIPE 1 (HYBRID) ---
 def get_pdf_tables_tipe1(page):
+    clean_p = bersihkan_halaman_pdf(page)
     table_settings = {
         "vertical_strategy": "lines",
         "horizontal_strategy": "text",
     }
-    tables = page.extract_tables(table_settings)
+    tables = clean_p.extract_tables(table_settings)
     if not tables or len(tables) == 0 or all(len(t) < 2 for t in tables):
-        tables = page.extract_tables()
+        tables = clean_p.extract_tables()
     return tables
 
 def process_hybrid_table(table):
@@ -240,28 +269,29 @@ def process_hybrid_table(table):
     df = pd.DataFrame(merged_rows[header_index+1:], columns=headers)
     return df
 
-# --- LOGIKA EKSTRAKSI TABEL PDF TIPE 2 (DEFAULT & ALL COLUMNS - ANTI BENGKAK KOLOM) ---
-def process_standard_table(table, master_headers=None):
-    if not table or len(table) < 1: return None, master_headers
+# --- LOGIKA EKSTRAKSI TABEL PDF TIPE 2 (SUPER HEMAT RAM - LIST BASED) ---
+def extract_rows_standard(table, master_headers=None):
+    if not table or len(table) < 1: 
+        return [], master_headers
     
     cleaned_table = []
     for row in table:
-        cleaned_row = [str(cell).replace('\n', ' ').strip() if cell and str(cell) != 'None' else "" for cell in row]
-        if any(cleaned_row): cleaned_table.append(cleaned_row)
+        cleaned_row = [str(cell).replace('\n', ' ').strip() if cell is not None and str(cell) != 'None' else "" for cell in row]
+        if any(cleaned_row): 
+            cleaned_table.append(cleaned_row)
 
-    if not cleaned_table: return None, master_headers
+    if not cleaned_table: 
+        return [], master_headers
 
     header_index = -1
     header_keywords = ['ID PEL', 'IDPEL', 'NOPEL', 'NAMA', 'ALAMAT', 'THBLREK', 'KDDK', 'KODERBM', 'STAND', 'TARIF']
     for idx, row in enumerate(cleaned_table[:5]):
         row_str = " ".join([str(c).upper() for c in row])
-        # Minimal cocok 2 kata kunci agar baris data pelanggan tidak dikira header
         matches = sum(1 for kw in header_keywords if kw in row_str)
         if matches >= 2:
             header_index = idx
             break
 
-    # Jika di halaman ini ditemukan header tabel:
     if header_index != -1:
         headers = []
         for i, h in enumerate(cleaned_table[header_index]):
@@ -283,21 +313,22 @@ def process_standard_table(table, master_headers=None):
         if master_headers is None:
             master_headers = unique_headers
     else:
-        # Jika halaman lanjutan TIDAK punya header, gunakan master_headers dari halaman 1
         data_rows = cleaned_table
-        if master_headers is not None and len(cleaned_table[0]) == len(master_headers):
-            unique_headers = master_headers
-        else:
-            unique_headers = [f"KOLOM_{i+1}" for i in range(len(cleaned_table[0]))]
+        if master_headers is None:
+            master_headers = [f"KOLOM_{i+1}" for i in range(len(cleaned_table[0]))]
 
-    if not data_rows: return None, master_headers
+    if not data_rows: 
+        return [], master_headers
     
-    # Samakan jumlah kolom baris data dengan panjang header agar tidak error
-    num_cols = len(unique_headers)
-    normalized_rows = [r[:num_cols] + [""] * max(0, num_cols - len(r)) for r in data_rows]
+    num_cols = len(master_headers)
+    normalized_rows = []
+    for r in data_rows:
+        # Lewati jika baris ini adalah pengulangan judul kolom
+        if len(r) > 0 and str(r[0]).strip().upper() == master_headers[0]:
+            continue
+        normalized_rows.append(r[:num_cols] + [""] * max(0, num_cols - len(r)))
         
-    df = pd.DataFrame(normalized_rows, columns=unique_headers)
-    return df, master_headers
+    return normalized_rows, master_headers
 
 # --- FUNGSI NORMALISASI (HANYA DIGUNAKAN DI TAB 3) ---
 def find_target_column(col_name):
@@ -563,7 +594,7 @@ with tab3:
         elif not PDF_SUPPORT: st.error("Library `pdfplumber` belum di-install.")
         else:
             all_extracted_dfs = []
-            with st.spinner("Mengekstraksi data Tipe 1..."):
+            with st.spinner("Mengekstraksi data Tipe 1 (Tanpa Watermark)..."):
                 for uploaded_pdf in pdf_files_t1:
                     with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp: 
                         tmp.write(uploaded_pdf.getvalue())
@@ -589,11 +620,11 @@ with tab3:
                 st.warning("⚠️ Tidak ada data tabel yang terdeteksi.")
 
 # ==========================================
-# TAB 4: IMPORT & EKSTRAK PDF (TIPE 2 - HEMAT RAM)
+# TAB 4: IMPORT & EKSTRAK PDF (TIPE 2 - ANTI CRASH & TANPA WATERMARK)
 # ==========================================
 with tab4:
     st.header("Tahap 4: Import & Ekstrak PDF (Tipe 2 - Semua Kolom)")
-    st.markdown("Digunakan untuk format PDF standar. **Mengekspor semua kolom utuh apa adanya.**")
+    st.markdown("Digunakan untuk format PDF standar. **Mengekspor semua kolom utuh apa adanya (Otomatis Membuang Watermark).**")
     pdf_files_t2 = st.file_uploader("Upload File PDF Tipe 2", type=['pdf'], accept_multiple_files=True, key="t4_pdf")
 
     if st.button("Proses & Ekstrak Semua Data (Tipe 2)", type="primary"):
@@ -602,74 +633,86 @@ with tab4:
         elif not PDF_SUPPORT: 
             st.error("Library `pdfplumber` belum di-install.")
         else:
-            all_extracted_dfs = []
+            all_rows = [] # Menyimpan baris mentah (jauh lebih ringan daripada ratusan DataFrame)
             error_pages = [] 
-            master_headers = None # Pengunci kolom agar tidak bengkak jadi ribuan kolom
+            master_headers = None
             
-            with st.spinner("🚀 Sedang mengekstraksi PDF besar..."):
-                for uploaded_pdf in pdf_files_t2:
+            with st.spinner("🚀 Sedang mengekstraksi PDF besar & membersihkan watermark..."):
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+                total_files = len(pdf_files_t2)
+
+                for f_idx, uploaded_pdf in enumerate(pdf_files_t2):
+                    fname = uploaded_pdf.name
                     with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp: 
-                        tmp.write(uploaded_pdf.getvalue())
+                        tmp.write(uploaded_pdf.read()) # .read() lebih hemat RAM daripada .getvalue()
                         tmp_path = tmp.name
+                    
+                    # Kembalikan pointer file & bersihkan RAM sebelum buka PDF
+                    uploaded_pdf.seek(0)
+                    gc.collect()
                         
                     try:
                         with pdfplumber.open(tmp_path) as pdf:
                             total_pages = len(pdf.pages)
-                            progress_bar = st.progress(0)
-                            status_text = st.empty()
                             
                             for i, page in enumerate(pdf.pages):
                                 try:
-                                    tables = page.extract_tables() 
+                                    # Bersihkan watermark diagonal/besar sebelum ekstrak tabel!
+                                    clean_p = bersihkan_halaman_pdf(page)
+                                    tables = clean_p.extract_tables() 
                                     for table in tables:
-                                        df_std, master_headers = process_standard_table(table, master_headers)
-                                        if df_std is not None and not df_std.empty: 
-                                            all_extracted_dfs.append(df_std)
+                                        rows, master_headers = extract_rows_standard(table, master_headers)
+                                        if rows: 
+                                            all_rows.extend(rows)
                                 except Exception as e:
-                                    error_pages.append(f"Halaman {i+1}: {str(e)}")
+                                    error_pages.append(f"{fname} - Hal {i+1}: {str(e)}")
                                 finally:
                                     page.flush_cache() 
                                 
-                                if (i + 1) % 5 == 0 or (i + 1) == total_pages:
+                                if (i + 1) % 10 == 0 or (i + 1) == total_pages:
                                     progress_bar.progress((i + 1) / total_pages)
-                                    status_text.text(f"Memproses halaman {i+1} dari {total_pages}...")
+                                    status_text.text(f"File {f_idx+1}/{total_files} ({fname}): Memproses halaman {i+1} dari {total_pages}...")
                                     gc.collect()
                                 
                     except Exception as e:
-                        st.error(f"Gagal membuka file PDF: {str(e)}")
+                        st.error(f"Gagal membuka file {fname}: {str(e)}")
                     finally:
                         if os.path.exists(tmp_path): 
                             os.remove(tmp_path)
+                        gc.collect()
 
-            if all_extracted_dfs:
+            if all_rows and master_headers:
                 try:
-                    status_text.text("Menggabungkan tabel dan menyiapkan file unduhan...")
-                    final_pdf_df = pd.concat(all_extracted_dfs, ignore_index=True)
+                    status_text.text("Menyusun tabel & mengonversi ke Excel (Mode Ringan)...")
+                    final_pdf_df = pd.DataFrame(all_rows, columns=master_headers)
                     
-                    # Bersihkan memori list sementara segera setelah digabung!
-                    del all_extracted_dfs
+                    # Langsung hapus list mentah dari RAM!
+                    del all_rows
                     gc.collect()
                     
-                    if len(final_pdf_df.columns) > 0:
-                        first_col = final_pdf_df.columns[0]
-                        final_pdf_df = final_pdf_df[final_pdf_df[first_col] != first_col]
+                    total_baris = len(final_pdf_df)
+                    total_kolom = len(final_pdf_df.columns)
                     
-                    # Hapus kolom yang 100% kosong (jaga-jaga jika ada kolom nyasar)
-                    final_pdf_df = final_pdf_df.replace("", np.nan).dropna(axis=1, how='all').fillna("")
-                    final_pdf_df = final_pdf_df.reset_index(drop=True)
+                    # Simpan 50 baris saja untuk ditampilkan di layar
+                    preview_df = final_pdf_df.head(50).copy()
+                    
+                    # Konversi ke Excel dengan mode write_only (Hemat RAM 80%)
+                    excel_bytes = to_excel_bytes_light(final_pdf_df)
+                    
+                    # Hapus DataFrame utama yang besar dari RAM sebelum render UI Streamlit!
+                    del final_pdf_df
+                    gc.collect()
 
-                    st.success(f"✅ Berhasil mengekstraksi {len(final_pdf_df)} baris dengan {len(final_pdf_df.columns)} kolom utuh!")
+                    status_text.empty()
+                    st.success(f"✅ Berhasil mengekstraksi {total_baris} baris dengan {total_kolom} kolom bersih tanpa watermark dari {total_files} file!")
                     
                     if error_pages:
                         st.warning(f"⚠️ Ada {len(error_pages)} halaman yang dilewati karena error format.")
                         with st.expander("Lihat Detail Error"):
                             for err in error_pages: st.write(err)
 
-                    st.dataframe(final_pdf_df.head(50), use_container_width=True)
-                    
-                    # Buat file Excel di memori lalu bersihkan sampah memori
-                    excel_bytes = to_excel_bytes(final_pdf_df)
-                    gc.collect()
+                    st.dataframe(preview_df, use_container_width=True)
                     
                     st.download_button(
                         "📥 Download Semua Data Tipe 2 (.xlsx)", 
@@ -679,9 +722,9 @@ with tab4:
                         type="primary"
                     )
                 except Exception as e:
-                    st.error(f"Gagal saat menggabungkan data: {str(e)}")
+                    st.error(f"Gagal saat menyiapkan file unduhan: {str(e)}")
             else:
-                st.warning("⚠️ Tidak ada data tabel yang terdeteksi.")
+                st.warning("⚠ Tidak ada data tabel yang terdeteksi.")
 
 # ==========================================
 # TAB 5: PARSING BANYAK FILE ICONPRN KE EXCEL
