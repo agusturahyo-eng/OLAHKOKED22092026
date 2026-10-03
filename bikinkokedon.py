@@ -3,14 +3,15 @@ import pandas as pd
 import numpy as np
 from dbfread import DBF
 import os
+import sys
 import io
 import csv
 import json
 import zipfile
 import tempfile
+import subprocess
 import re
 import gc
-import multiprocessing
 import openpyxl
 
 # --- PENGATURAN HALAMAN (WAJIB PALING ATAS DI STREAMLIT) ---
@@ -86,7 +87,6 @@ def fix_masked_info(df_baru, df_master, df_sup_pb):
     nama_map = {}
     alamat_map = {}
 
-    # 1. Ambil dari File Data Pelanggan Baru (Pelengkap) dahulu
     if not df_sup_pb.empty:
         sup_clean = df_sup_pb.drop_duplicates(subset=['IDPEL'], keep='first').copy()
         sup_clean = sup_clean[
@@ -96,7 +96,6 @@ def fix_masked_info(df_baru, df_master, df_sup_pb):
         nama_map.update(sup_clean.set_index('IDPEL')['NAMA'].to_dict())
         alamat_map.update(sup_clean.set_index('IDPEL')['ALAMAT'].to_dict())
 
-    # 2. Ambil dari Data Master (Timpa data pelengkap jika IDPEL ada di Master)
     if not df_master.empty:
         master_clean = df_master.drop_duplicates(subset=['IDPEL'], keep='first').copy()
         master_clean = master_clean[
@@ -109,11 +108,9 @@ def fix_masked_info(df_baru, df_master, df_sup_pb):
     if not nama_map and not alamat_map:
         return df_baru
 
-    # Deteksi NAMA & ALAMAT yang di-masking/bintang
     is_masked_nama = df_baru['NAMA'].astype(str).str.contains(r'\*', na=False) | df_baru['NAMA'].isna() | (df_baru['NAMA'].astype(str).str.strip() == '')
     is_masked_alamat = df_baru['ALAMAT'].astype(str).str.contains(r'\*', na=False) | df_baru['ALAMAT'].isna() | (df_baru['ALAMAT'].astype(str).str.strip() == '')
 
-    # Timpa dengan nilai dari kamus gabungan (Master + PB Pelengkap)
     df_baru.loc[is_masked_nama, 'NAMA'] = df_baru.loc[is_masked_nama, 'IDPEL'].map(nama_map).fillna(df_baru.loc[is_masked_nama, 'NAMA'])
     df_baru.loc[is_masked_alamat, 'ALAMAT'] = df_baru.loc[is_masked_alamat, 'IDPEL'].map(alamat_map).fillna(df_baru.loc[is_masked_alamat, 'ALAMAT'])
 
@@ -255,7 +252,21 @@ def process_hybrid_table(table):
     df = pd.DataFrame(merged_rows[header_index+1:], columns=headers)
     return df
 
-# --- LOGIKA EKSTRAKSI TABEL PDF TIPE 2 (SUPER HEMAT RAM & SUBPROCESS ISOLATION) ---
+# --- SKRIP PEKERJA EKSTERNAL MANDIRI UNTUK TAB 4 (BEBAS BENTROK THREAD & RESET RAM 100%) ---
+WORKER_SCRIPT_CODE = r'''
+import sys
+import json
+import csv
+import pdfplumber
+
+def filter_watermark_obj(obj):
+    if obj.get("object_type") == "char":
+        if not obj.get("upright", True):
+            return False
+        if obj.get("size", 0) > 14:
+            return False
+    return True
+
 def extract_rows_standard(table, master_headers=None):
     if not table or len(table) < 1: 
         return [], master_headers
@@ -315,8 +326,11 @@ def extract_rows_standard(table, master_headers=None):
         
     return normalized_rows, master_headers
 
-# Worker Subprocess 1: Cek jumlah halaman PDF lalu mati (RAM kembali 0)
-def _worker_get_num_pages(pdf_path, out_json):
+mode = sys.argv[1]
+
+if mode == "count":
+    pdf_path = sys.argv[2]
+    out_json = sys.argv[3]
     try:
         with pdfplumber.open(pdf_path) as pdf:
             res = {"pages": len(pdf.pages), "error": None}
@@ -325,24 +339,33 @@ def _worker_get_num_pages(pdf_path, out_json):
     with open(out_json, 'w', encoding='utf-8') as f:
         json.dump(res, f)
 
-# Worker Subprocess 2: Ekstrak potongan 20 halaman langsung ke CSV di Disk lalu mati (RAM kembali 0)
-def _worker_extract_chunk(pdf_path, fname, start_idx, end_idx, csv_path, state_json):
+elif mode == "chunk":
+    pdf_path = sys.argv[2]
+    fname = sys.argv[3]
+    start_page = int(sys.argv[4]) # 1-indexed untuk pdfplumber pages=[...]
+    end_page = int(sys.argv[5])
+    csv_path = sys.argv[6]
+    state_json = sys.argv[7]
+
     with open(state_json, 'r', encoding='utf-8') as f:
         state = json.load(f)
-    
+
     master_headers = state.get("master_headers", None)
     header_written = state.get("header_written", False)
     total_baris = state.get("total_baris", 0)
     preview_rows = state.get("preview_rows", [])
     error_pages = state.get("error_pages", [])
 
+    page_numbers = list(range(start_page, end_page + 1))
+
     with open(csv_path, 'a', newline='', encoding='utf-8') as f_csv:
         writer = csv.writer(f_csv)
-        with pdfplumber.open(pdf_path) as pdf:
-            for i in range(start_idx, end_idx):
-                page = pdf.pages[i]
+        # Hanya memuat halaman yang diminta ke memori!
+        with pdfplumber.open(pdf_path, pages=page_numbers) as pdf:
+            for idx, page in enumerate(pdf.pages):
+                hal_asli = start_page + idx
                 try:
-                    clean_p = bersihkan_halaman_pdf(page)
+                    clean_p = page.filter(filter_watermark_obj)
                     tables = clean_p.extract_tables()
                     for table in tables:
                         rows, master_headers = extract_rows_standard(table, master_headers)
@@ -356,7 +379,7 @@ def _worker_extract_chunk(pdf_path, fname, start_idx, end_idx, csv_path, state_j
                                 if len(preview_rows) < 50:
                                     preview_rows.append(r)
                 except Exception as e:
-                    error_pages.append(f"{fname} - Hal {i+1}: {str(e)}")
+                    error_pages.append(f"{fname} - Hal {hal_asli}: {str(e)}")
                 finally:
                     page.flush_cache()
 
@@ -368,8 +391,10 @@ def _worker_extract_chunk(pdf_path, fname, start_idx, end_idx, csv_path, state_j
     with open(state_json, 'w', encoding='utf-8') as f:
         json.dump(state, f)
 
-# Worker Subprocess 3: Konversi CSV di Disk ke Excel (.xlsx) lalu mati (RAM kembali 0)
-def _worker_csv_to_excel(csv_path, excel_path):
+elif mode == "excel":
+    import openpyxl
+    csv_path = sys.argv[2]
+    excel_path = sys.argv[3]
     wb = openpyxl.Workbook(write_only=True)
     ws = wb.create_sheet(title="Data")
     with open(csv_path, 'r', newline='', encoding='utf-8') as f_csv:
@@ -378,17 +403,7 @@ def _worker_csv_to_excel(csv_path, excel_path):
             ws.append(row)
     wb.save(excel_path)
     wb.close()
-
-def jalankan_di_subprocess(target_func, args):
-    try:
-        ctx = multiprocessing.get_context("fork")
-        p = ctx.Process(target=target_func, args=args)
-        p.start()
-        p.join()
-        if p.exitcode != 0:
-            target_func(*args)
-    except Exception:
-        target_func(*args)
+'''
 
 # --- FUNGSI NORMALISASI (HANYA DIGUNAKAN DI TAB 3) ---
 def find_target_column(col_name):
@@ -668,11 +683,11 @@ with tab3:
                 st.warning("⚠️ Tidak ada data tabel yang terdeteksi.")
 
 # ==========================================
-# TAB 4: IMPORT & EKSTRAK PDF (TIPE 2 - SUBPROCESS ISOLATION ANTI-CRASH)
+# TAB 4: IMPORT & EKSTRAK PDF (TIPE 2 - EXTERNAL WORKER ANTI-CRASH)
 # ==========================================
 with tab4:
     st.header("Tahap 4: Import & Ekstrak PDF (Tipe 2 - Semua Kolom)")
-    st.markdown("Digunakan untuk format PDF standar. **Mengekspor semua kolom utuh apa adanya (Mode Subprocess Reset RAM 100% & Tanpa Watermark).**")
+    st.markdown("Digunakan untuk format PDF standar. **Mengekspor semua kolom utuh apa adanya (Mode External Worker Anti-Crash & Tanpa Watermark).**")
     pdf_files_t2 = st.file_uploader("Upload File PDF Tipe 2", type=['pdf'], accept_multiple_files=True, key="t4_pdf")
 
     if st.button("Proses & Ekstrak Semua Data (Tipe 2)", type="primary"):
@@ -681,7 +696,12 @@ with tab4:
         elif not PDF_SUPPORT: 
             st.error("Library `pdfplumber` belum di-install.")
         else:
-            # Siapkan file sementara di Disk untuk CSV, State JSON, dan Excel
+            # Tulis file worker.py sementara di disk
+            tmp_worker = tempfile.NamedTemporaryFile(delete=False, suffix='.py', mode='w', encoding='utf-8')
+            tmp_worker.write(WORKER_SCRIPT_CODE)
+            tmp_worker_path = tmp_worker.name
+            tmp_worker.close()
+
             tmp_csv = tempfile.NamedTemporaryFile(delete=False, suffix='.csv')
             tmp_csv_path = tmp_csv.name
             tmp_csv.close()
@@ -704,7 +724,7 @@ with tab4:
             with open(tmp_state_path, 'w', encoding='utf-8') as f:
                 json.dump(initial_state, f)
 
-            with st.spinner("🚀 Mengekstraksi PDF dengan Subprocess Isolation (RAM Direset ke 0 Setiap 20 Halaman)..."):
+            with st.spinner("🚀 Mengekstraksi PDF dengan Pekerja Mandiri (RAM Utama Dijamin Kosong)..."):
                 progress_bar = st.progress(0)
                 status_text = st.empty()
                 total_files = len(pdf_files_t2)
@@ -712,30 +732,19 @@ with tab4:
                 for f_idx, uploaded_pdf in enumerate(pdf_files_t2):
                     fname = uploaded_pdf.name
                     
-                    # Salin file PDF ke disk per potongan 1 MB
                     with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_pdf:
-                        uploaded_pdf.seek(0)
-                        while True:
-                            chunk = uploaded_pdf.read(1024 * 1024)
-                            if not chunk:
-                                break
-                            tmp_pdf.write(chunk)
+                        tmp_pdf.write(uploaded_pdf.getvalue())
                         tmp_path = tmp_pdf.name
                     
-                    # Kosongkan buffer memori file uploader yang sudah disalin ke disk
-                    try:
-                        uploaded_pdf.close()
-                    except Exception:
-                        pass
                     gc.collect()
 
-                    # Cek jumlah halaman di dalam Subprocess terpisah
                     tmp_info = tempfile.NamedTemporaryFile(delete=False, suffix='.json')
                     tmp_info_path = tmp_info.name
                     tmp_info.close()
 
                     try:
-                        jalankan_di_subprocess(_worker_get_num_pages, (tmp_path, tmp_info_path))
+                        # 1. Hitung jumlah halaman lewat proses Python eksternal
+                        subprocess.run([sys.executable, tmp_worker_path, "count", tmp_path, tmp_info_path], check=False)
                         with open(tmp_info_path, 'r', encoding='utf-8') as f:
                             info_data = json.load(f)
                         
@@ -745,22 +754,22 @@ with tab4:
                         
                         total_pages = info_data.get("pages", 0)
                         
-                        # Ekstrak per 20 halaman di dalam Subprocess Anak!
-                        # Saat Subprocess Anak selesai, OS Linux membuang 100% RAM pdfplumber kembali ke 0!
-                        CHUNK_SIZE = 20
-                        for start_idx in range(0, total_pages, CHUNK_SIZE):
-                            end_idx = min(start_idx + CHUNK_SIZE, total_pages)
+                        # 2. Ekstrak per 15 halaman lewat proses Python eksternal (1-indexed)
+                        CHUNK_SIZE = 15
+                        for start_p in range(1, total_pages + 1, CHUNK_SIZE):
+                            end_p = min(start_p + CHUNK_SIZE - 1, total_pages)
                             
-                            jalankan_di_subprocess(
-                                _worker_extract_chunk,
-                                (tmp_path, fname, start_idx, end_idx, tmp_csv_path, tmp_state_path)
-                            )
+                            subprocess.run([
+                                sys.executable, tmp_worker_path, "chunk",
+                                tmp_path, fname, str(start_p), str(end_p),
+                                tmp_csv_path, tmp_state_path
+                            ], check=False)
                             
                             with open(tmp_state_path, 'r', encoding='utf-8') as f:
                                 curr_state = json.load(f)
                             
-                            progress_bar.progress(end_idx / max(1, total_pages))
-                            status_text.text(f"File {f_idx+1}/{total_files} ({fname}): Selesai halaman {end_idx}/{total_pages} (Total terkumpul: {curr_state['total_baris']} baris)...")
+                            progress_bar.progress(end_p / max(1, total_pages))
+                            status_text.text(f"File {f_idx+1}/{total_files} ({fname}): Selesai halaman {end_p}/{total_pages} (Terkumpul: {curr_state['total_baris']} baris)...")
                             gc.collect()
 
                     finally:
@@ -770,7 +779,6 @@ with tab4:
                             os.remove(tmp_path)
                         gc.collect()
 
-            # Baca hasil akhir dari State JSON
             with open(tmp_state_path, 'r', encoding='utf-8') as f:
                 final_state = json.load(f)
             if os.path.exists(tmp_state_path):
@@ -783,9 +791,9 @@ with tab4:
 
             if total_baris > 0 and master_headers:
                 try:
-                    status_text.text(f"Mengonversi {total_baris} baris ke file Excel (.xlsx) di Subprocess...")
-                    # Konversi CSV ke Excel di dalam Subprocess terpisah agar RAM utama tetap 0!
-                    jalankan_di_subprocess(_worker_csv_to_excel, (tmp_csv_path, tmp_excel_path))
+                    status_text.text(f"Mengonversi {total_baris} baris ke file Excel (.xlsx)...")
+                    # 3. Konversi CSV ke Excel lewat proses Python eksternal
+                    subprocess.run([sys.executable, tmp_worker_path, "excel", tmp_csv_path, tmp_excel_path], check=False)
                     gc.collect()
 
                     status_text.empty()
@@ -811,15 +819,11 @@ with tab4:
                 except Exception as e:
                     st.error(f"Gagal saat menyiapkan file unduhan: {str(e)}")
                 finally:
-                    if os.path.exists(tmp_csv_path):
-                        os.remove(tmp_csv_path)
-                    if os.path.exists(tmp_excel_path):
-                        os.remove(tmp_excel_path)
+                    for p in [tmp_worker_path, tmp_csv_path, tmp_excel_path]:
+                        if os.path.exists(p): os.remove(p)
             else:
-                if os.path.exists(tmp_csv_path):
-                    os.remove(tmp_csv_path)
-                if os.path.exists(tmp_excel_path):
-                    os.remove(tmp_excel_path)
+                for p in [tmp_worker_path, tmp_csv_path, tmp_excel_path]:
+                    if os.path.exists(p): os.remove(p)
                 st.warning("⚠️ Tidak ada data tabel yang terdeteksi.")
 
 # ==========================================
