@@ -4,3 +4,4 @@ openpyxl
 dbfread
 pdfplumber
 supabase
+pymupdf
