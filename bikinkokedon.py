@@ -4,10 +4,13 @@ import numpy as np
 from dbfread import DBF
 import os
 import io
+import csv
+import json
 import zipfile
 import tempfile
 import re
-import gc # Untuk garbage collection
+import gc
+import multiprocessing
 import openpyxl
 
 # --- PENGATURAN HALAMAN (WAJIB PALING ATAS DI STREAMLIT) ---
@@ -30,7 +33,6 @@ if not st.session_state.authenticated:
             st.error("Password salah!")
             
     # HENTIKAN aplikasi di sini jika belum login. 
-    # Kode di bawah baris ini tidak akan dibaca.
     st.stop()
 
 # Library PDF
@@ -141,10 +143,7 @@ def baca_ekstrak_tabel(uploaded_file):
                 os.remove(tmp_path)
 
     df.columns = df.columns.astype(str).str.strip().str.upper()
-    # Logika Rename dikembalikan murni seperti di file Tkinter (menghindari duplikasi)
     df = df.rename(columns={'KDDK': 'KOKED', 'TARIF': 'TARIP', 'NAMAPNJ': 'ALAMAT'})
-    
-    # Pencegahan error duplikasi jika DBF asli kotor
     df = df.loc[:, ~df.columns.duplicated(keep='first')]
     
     return df, fname
@@ -155,7 +154,6 @@ def proses_list_file(files, tipe_data):
         df, fname = baca_ekstrak_tabel(f)
         if df.empty: continue
         
-        # Logika filter kolom dibelah agar akurat sesuai jenis datanya
         if tipe_data == 'baru':
             if 'ALAMAT' not in df.columns: df['ALAMAT'] = ''
             for col in ['IDPEL', 'KOKED', 'TARIP', 'DAYA', 'NAMA']:
@@ -170,7 +168,6 @@ def proses_list_file(files, tipe_data):
             if 'KOKED' not in df.columns: df['KOKED'] = ''
             df['IDPEL'] = df['IDPEL'].apply(clean_idpel)
             df['KOKED'] = df['KOKED'].astype(str).str.strip()
-            # Menyertakan KOKED agar Tahap 2 bisa membandingkan KOKED (tidak mengganggu Tahap 1)
             list_df.append(df[['IDPEL', 'KOKED']])
             
         elif tipe_data == 'master':
@@ -258,7 +255,7 @@ def process_hybrid_table(table):
     df = pd.DataFrame(merged_rows[header_index+1:], columns=headers)
     return df
 
-# --- LOGIKA EKSTRAKSI TABEL PDF TIPE 2 (SUPER HEMAT RAM - LIST BASED) ---
+# --- LOGIKA EKSTRAKSI TABEL PDF TIPE 2 (SUPER HEMAT RAM & SUBPROCESS ISOLATION) ---
 def extract_rows_standard(table, master_headers=None):
     if not table or len(table) < 1: 
         return [], master_headers
@@ -312,12 +309,86 @@ def extract_rows_standard(table, master_headers=None):
     num_cols = len(master_headers)
     normalized_rows = []
     for r in data_rows:
-        # Lewati jika baris ini adalah pengulangan judul kolom
         if len(r) > 0 and str(r[0]).strip().upper() == master_headers[0]:
             continue
         normalized_rows.append(r[:num_cols] + [""] * max(0, num_cols - len(r)))
         
     return normalized_rows, master_headers
+
+# Worker Subprocess 1: Cek jumlah halaman PDF lalu mati (RAM kembali 0)
+def _worker_get_num_pages(pdf_path, out_json):
+    try:
+        with pdfplumber.open(pdf_path) as pdf:
+            res = {"pages": len(pdf.pages), "error": None}
+    except Exception as e:
+        res = {"pages": 0, "error": str(e)}
+    with open(out_json, 'w', encoding='utf-8') as f:
+        json.dump(res, f)
+
+# Worker Subprocess 2: Ekstrak potongan 20 halaman langsung ke CSV di Disk lalu mati (RAM kembali 0)
+def _worker_extract_chunk(pdf_path, fname, start_idx, end_idx, csv_path, state_json):
+    with open(state_json, 'r', encoding='utf-8') as f:
+        state = json.load(f)
+    
+    master_headers = state.get("master_headers", None)
+    header_written = state.get("header_written", False)
+    total_baris = state.get("total_baris", 0)
+    preview_rows = state.get("preview_rows", [])
+    error_pages = state.get("error_pages", [])
+
+    with open(csv_path, 'a', newline='', encoding='utf-8') as f_csv:
+        writer = csv.writer(f_csv)
+        with pdfplumber.open(pdf_path) as pdf:
+            for i in range(start_idx, end_idx):
+                page = pdf.pages[i]
+                try:
+                    clean_p = bersihkan_halaman_pdf(page)
+                    tables = clean_p.extract_tables()
+                    for table in tables:
+                        rows, master_headers = extract_rows_standard(table, master_headers)
+                        if rows and master_headers:
+                            if not header_written:
+                                writer.writerow(list(master_headers))
+                                header_written = True
+                            for r in rows:
+                                writer.writerow(list(r))
+                                total_baris += 1
+                                if len(preview_rows) < 50:
+                                    preview_rows.append(r)
+                except Exception as e:
+                    error_pages.append(f"{fname} - Hal {i+1}: {str(e)}")
+                finally:
+                    page.flush_cache()
+
+    state["master_headers"] = master_headers
+    state["header_written"] = header_written
+    state["total_baris"] = total_baris
+    state["preview_rows"] = preview_rows
+    state["error_pages"] = error_pages
+    with open(state_json, 'w', encoding='utf-8') as f:
+        json.dump(state, f)
+
+# Worker Subprocess 3: Konversi CSV di Disk ke Excel (.xlsx) lalu mati (RAM kembali 0)
+def _worker_csv_to_excel(csv_path, excel_path):
+    wb = openpyxl.Workbook(write_only=True)
+    ws = wb.create_sheet(title="Data")
+    with open(csv_path, 'r', newline='', encoding='utf-8') as f_csv:
+        reader = csv.reader(f_csv)
+        for row in reader:
+            ws.append(row)
+    wb.save(excel_path)
+    wb.close()
+
+def jalankan_di_subprocess(target_func, args):
+    try:
+        ctx = multiprocessing.get_context("fork")
+        p = ctx.Process(target=target_func, args=args)
+        p.start()
+        p.join()
+        if p.exitcode != 0:
+            target_func(*args)
+    except Exception:
+        target_func(*args)
 
 # --- FUNGSI NORMALISASI (HANYA DIGUNAKAN DI TAB 3) ---
 def find_target_column(col_name):
@@ -418,7 +489,6 @@ with tab1:
         else:
             with st.spinner("Menyiapkan data untuk petugas..."):
                 try:
-                    # 1. BACA DATA
                     df_baru = proses_list_file(files_baru, 'baru')
                     df_lama = proses_list_file(files_lama, 'lama')
                     df_master = proses_list_file(files_master, 'master') if files_master else pd.DataFrame()
@@ -427,19 +497,15 @@ with tab1:
                     if df_baru.empty: raise ValueError("Data Bulan Ini kosong atau gagal dibaca.")
                     if df_lama.empty: raise ValueError("Data Bulan Lalu kosong atau gagal dibaca.")
 
-                    # 2. PERBAIKI NAMA BINTANG (MASTER + PB PELENGKAP)
                     df_baru = fix_masked_info(df_baru, df_master, df_sup_pb)
 
-                    # 3. FILTER DAYA & IDPEL BLOKIR
                     idpel_block = '524050450911'
                     df_baru = df_baru[(df_baru['DAYA'] <= 33000) & (df_baru['IDPEL'] != idpel_block)].copy().reset_index(drop=True)
 
-                    # 4. PISAHKAN PB & PELANGGAN TETAP
                     list_idpel_lama = set(df_lama['IDPEL'].tolist())
                     df_pb = df_baru[~df_baru['IDPEL'].isin(list_idpel_lama)].copy().reset_index(drop=True)
                     df_tetap = df_baru[df_baru['IDPEL'].isin(list_idpel_lama)].copy().reset_index(drop=True)
 
-                    # PENGURUTAN MENGGUNAKAN KOKED (URUT 7:10)
                     for df in [df_pb, df_tetap]:
                         if not df.empty:
                             df['NO_URUT'] = df['KOKED'].astype(str).str[7:10]
@@ -451,13 +517,11 @@ with tab1:
                     zip_buffer = io.BytesIO()
                     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
                         
-                        # 5. EKSPORT REKAP PB SELURUH PETUGAS
                         if not df_pb.empty:
                             df_pb_clean = df_pb.drop_duplicates(subset=['IDPEL'], keep='first')
                             pb_bytes = to_excel_bytes(df_pb_clean[kolom_export])
                             zip_file.writestr("PB_SEMUA_PETUGAS.xlsx", pb_bytes)
 
-                        # 6. BUAT & EKSPORT DATA MASTER TER-UPDATE
                         df_master_base = df_master[kolom_export].copy() if not df_master.empty else pd.DataFrame(columns=kolom_export)
                         df_pb_master_format = df_pb[kolom_export].copy()
                         df_master_combined = pd.concat([df_master_base, df_pb_master_format], ignore_index=True)
@@ -483,7 +547,6 @@ with tab1:
 
                         zip_file.writestr("MASTER_UPDATED.xlsx", to_excel_bytes(df_master_combined[kolom_export]))
 
-                        # 7. EKSPORT FILE WILAYAH/PETUGAS
                         mapping = {
                             'C01': 'JCA', 'C02': 'TAA', 'C03': 'JCB', 'C04': 'JCC', 'C05': 'NCD',
                             'C06': 'KBA', 'C07': 'TAB', 'C08': 'JCE', 'C09': 'TAC', 'C10': 'MBB',
@@ -535,14 +598,11 @@ with tab2:
                     df_petugas = proses_list_file(files_petugas, 'petugas')
                     df_lama_pem = proses_list_file(files_lama_pembanding, 'lama')
 
-                    # --- PENYERAGAMAN NAMA KOLOM OTOMATIS ---
                     df_petugas.columns = df_petugas.columns.astype(str).str.strip().str.upper()
                     df_lama_pem.columns = df_lama_pem.columns.astype(str).str.strip().str.upper()
 
-                    # Ubah KDDK -> KOKED dan TARIP -> TARIF (pakai F)
                     df_petugas.rename(columns={'KDDK': 'KOKED', 'TARIP': 'TARIF'}, inplace=True)
                     df_lama_pem.rename(columns={'KDDK': 'KOKED', 'TARIP': 'TARIF'}, inplace=True)
-                    # ----------------------------------------
 
                     df_compare = df_petugas[['IDPEL', 'KOKED']].merge(
                         df_lama_pem[['IDPEL', 'KOKED']], 
@@ -554,7 +614,6 @@ with tab2:
                     df_petugas['NO_URUT'] = pd.to_numeric(df_petugas['KOKED'].str[7:10], errors='coerce').fillna(0).astype(int)
                     df_petugas.sort_values(by=['KOKED', 'NO_URUT'], inplace=True)
 
-                    # Pastikan kolom wajib tersedia sebelum diekspor ke Excel
                     for col in ['IDPEL', 'KOKED', 'NAMA', 'ALAMAT', 'TARIF', 'DAYA']:
                         if col not in df_petugas.columns:
                             df_petugas[col] = ''
@@ -609,11 +668,11 @@ with tab3:
                 st.warning("⚠️ Tidak ada data tabel yang terdeteksi.")
 
 # ==========================================
-# TAB 4: IMPORT & EKSTRAK PDF (TIPE 2 - DIRECT-TO-DISK STREAMING ANTI CRASH)
+# TAB 4: IMPORT & EKSTRAK PDF (TIPE 2 - SUBPROCESS ISOLATION ANTI-CRASH)
 # ==========================================
 with tab4:
     st.header("Tahap 4: Import & Ekstrak PDF (Tipe 2 - Semua Kolom)")
-    st.markdown("Digunakan untuk format PDF standar. **Mengekspor semua kolom utuh apa adanya (Mode Direct-to-Disk Anti-Crash & Tanpa Watermark).**")
+    st.markdown("Digunakan untuk format PDF standar. **Mengekspor semua kolom utuh apa adanya (Mode Subprocess Reset RAM 100% & Tanpa Watermark).**")
     pdf_files_t2 = st.file_uploader("Upload File PDF Tipe 2", type=['pdf'], accept_multiple_files=True, key="t4_pdf")
 
     if st.button("Proses & Ekstrak Semua Data (Tipe 2)", type="primary"):
@@ -622,21 +681,30 @@ with tab4:
         elif not PDF_SUPPORT: 
             st.error("Library `pdfplumber` belum di-install.")
         else:
-            error_pages = [] 
-            master_headers = None
-            preview_rows = []
-            total_baris = 0
-            
-            # Siapkan file Excel sementara langsung di Disk (BUKAN di RAM!)
+            # Siapkan file sementara di Disk untuk CSV, State JSON, dan Excel
+            tmp_csv = tempfile.NamedTemporaryFile(delete=False, suffix='.csv')
+            tmp_csv_path = tmp_csv.name
+            tmp_csv.close()
+
+            tmp_state = tempfile.NamedTemporaryFile(delete=False, suffix='.json')
+            tmp_state_path = tmp_state.name
+            tmp_state.close()
+
             tmp_excel = tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx')
             tmp_excel_path = tmp_excel.name
             tmp_excel.close()
-            
-            wb = openpyxl.Workbook(write_only=True)
-            ws = wb.create_sheet(title="Data")
-            header_written = False
-            
-            with st.spinner("🚀 Mengekstraksi PDF langsung ke Disk (RAM Dijamin Aman)..."):
+
+            initial_state = {
+                "master_headers": None,
+                "header_written": False,
+                "total_baris": 0,
+                "preview_rows": [],
+                "error_pages": []
+            }
+            with open(tmp_state_path, 'w', encoding='utf-8') as f:
+                json.dump(initial_state, f)
+
+            with st.spinner("🚀 Mengekstraksi PDF dengan Subprocess Isolation (RAM Direset ke 0 Setiap 20 Halaman)..."):
                 progress_bar = st.progress(0)
                 status_text = st.empty()
                 total_files = len(pdf_files_t2)
@@ -644,7 +712,7 @@ with tab4:
                 for f_idx, uploaded_pdf in enumerate(pdf_files_t2):
                     fname = uploaded_pdf.name
                     
-                    # Salin file PDF ke disk per potongan kecil (1 MB) agar RAM tidak melonjak
+                    # Salin file PDF ke disk per potongan 1 MB
                     with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_pdf:
                         uploaded_pdf.seek(0)
                         while True:
@@ -654,77 +722,84 @@ with tab4:
                             tmp_pdf.write(chunk)
                         tmp_path = tmp_pdf.name
                     
-                    uploaded_pdf.seek(0)
-                    gc.collect()
-                        
+                    # Kosongkan buffer memori file uploader yang sudah disalin ke disk
                     try:
-                        # Cek total halaman terlebih dahulu lalu tutup
-                        with pdfplumber.open(tmp_path) as pdf_check:
-                            total_pages = len(pdf_check.pages)
+                        uploaded_pdf.close()
+                    except Exception:
+                        pass
+                    gc.collect()
+
+                    # Cek jumlah halaman di dalam Subprocess terpisah
+                    tmp_info = tempfile.NamedTemporaryFile(delete=False, suffix='.json')
+                    tmp_info_path = tmp_info.name
+                    tmp_info.close()
+
+                    try:
+                        jalankan_di_subprocess(_worker_get_num_pages, (tmp_path, tmp_info_path))
+                        with open(tmp_info_path, 'r', encoding='utf-8') as f:
+                            info_data = json.load(f)
                         
-                        # Proses PDF per 25 halaman (Chunking) lalu tutup paksa pdfplumber
-                        # Ini memaksa pdfminer membuang 100% cache huruf dari RAM!
-                        CHUNK_SIZE = 25
+                        if info_data.get("error"):
+                            st.error(f"Gagal membuka file {fname}: {info_data['error']}")
+                            continue
+                        
+                        total_pages = info_data.get("pages", 0)
+                        
+                        # Ekstrak per 20 halaman di dalam Subprocess Anak!
+                        # Saat Subprocess Anak selesai, OS Linux membuang 100% RAM pdfplumber kembali ke 0!
+                        CHUNK_SIZE = 20
                         for start_idx in range(0, total_pages, CHUNK_SIZE):
                             end_idx = min(start_idx + CHUNK_SIZE, total_pages)
                             
-                            with pdfplumber.open(tmp_path) as pdf:
-                                for i in range(start_idx, end_idx):
-                                    page = pdf.pages[i]
-                                    try:
-                                        clean_p = bersihkan_halaman_pdf(page)
-                                        tables = clean_p.extract_tables() 
-                                        for table in tables:
-                                            rows, master_headers = extract_rows_standard(table, master_headers)
-                                            if rows and master_headers:
-                                                if not header_written:
-                                                    ws.append(list(master_headers))
-                                                    header_written = True
-                                                for r in rows:
-                                                    ws.append(list(r))
-                                                    total_baris += 1
-                                                    if len(preview_rows) < 50:
-                                                        preview_rows.append(r)
-                                    except Exception as e:
-                                        error_pages.append(f"{fname} - Hal {i+1}: {str(e)}")
-                                    finally:
-                                        page.flush_cache()
-                                        if 'clean_p' in locals():
-                                            clean_p.flush_cache()
+                            jalankan_di_subprocess(
+                                _worker_extract_chunk,
+                                (tmp_path, fname, start_idx, end_idx, tmp_csv_path, tmp_state_path)
+                            )
                             
-                            # Setelah 25 halaman selesai dan blok 'with' tertutup, kuras RAM!
-                            progress_bar.progress(end_idx / total_pages)
-                            status_text.text(f"File {f_idx+1}/{total_files} ({fname}): Selesai memproses halaman {end_idx} dari {total_pages} (Total: {total_baris} baris)...")
+                            with open(tmp_state_path, 'r', encoding='utf-8') as f:
+                                curr_state = json.load(f)
+                            
+                            progress_bar.progress(end_idx / max(1, total_pages))
+                            status_text.text(f"File {f_idx+1}/{total_files} ({fname}): Selesai halaman {end_idx}/{total_pages} (Total terkumpul: {curr_state['total_baris']} baris)...")
                             gc.collect()
-                                
-                    except Exception as e:
-                        st.error(f"Gagal membuka file {fname}: {str(e)}")
+
                     finally:
-                        if os.path.exists(tmp_path): 
+                        if os.path.exists(tmp_info_path):
+                            os.remove(tmp_info_path)
+                        if os.path.exists(tmp_path):
                             os.remove(tmp_path)
                         gc.collect()
 
-            # Tutup & simpan file Excel di Disk
-            wb.close()
-            wb.save(tmp_excel_path)
-            del wb
-            gc.collect()
+            # Baca hasil akhir dari State JSON
+            with open(tmp_state_path, 'r', encoding='utf-8') as f:
+                final_state = json.load(f)
+            if os.path.exists(tmp_state_path):
+                os.remove(tmp_state_path)
+
+            total_baris = final_state.get("total_baris", 0)
+            master_headers = final_state.get("master_headers", None)
+            preview_rows = final_state.get("preview_rows", [])
+            error_pages = final_state.get("error_pages", [])
 
             if total_baris > 0 and master_headers:
                 try:
+                    status_text.text(f"Mengonversi {total_baris} baris ke file Excel (.xlsx) di Subprocess...")
+                    # Konversi CSV ke Excel di dalam Subprocess terpisah agar RAM utama tetap 0!
+                    jalankan_di_subprocess(_worker_csv_to_excel, (tmp_csv_path, tmp_excel_path))
+                    gc.collect()
+
                     status_text.empty()
                     total_kolom = len(master_headers)
                     st.success(f"✅ Berhasil mengekstraksi {total_baris} baris dengan {total_kolom} kolom bersih tanpa watermark dari {total_files} file!")
                     
                     if error_pages:
-                        st.warning(f"⚠️ Ada {len(error_pages)} halaman yang dilewati karena error format.")
+                        st.warning(f"⚠️️ Ada {len(error_pages)} halaman yang dilewati karena error format.")
                         with st.expander("Lihat Detail Error"):
                             for err in error_pages: st.write(err)
 
                     preview_df = pd.DataFrame(preview_rows, columns=master_headers)
                     st.dataframe(preview_df, use_container_width=True)
                     
-                    # Buka file hasil dari Disk untuk tombol Download
                     with open(tmp_excel_path, "rb") as f_excel:
                         st.download_button(
                             "📥 Download Semua Data Tipe 2 (.xlsx)", 
@@ -736,9 +811,13 @@ with tab4:
                 except Exception as e:
                     st.error(f"Gagal saat menyiapkan file unduhan: {str(e)}")
                 finally:
+                    if os.path.exists(tmp_csv_path):
+                        os.remove(tmp_csv_path)
                     if os.path.exists(tmp_excel_path):
                         os.remove(tmp_excel_path)
             else:
+                if os.path.exists(tmp_csv_path):
+                    os.remove(tmp_csv_path)
                 if os.path.exists(tmp_excel_path):
                     os.remove(tmp_excel_path)
                 st.warning("⚠️ Tidak ada data tabel yang terdeteksi.")
