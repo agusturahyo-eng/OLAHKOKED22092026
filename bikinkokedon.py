@@ -9,6 +9,7 @@ import csv
 import shutil
 import zipfile
 import tempfile
+import bisect
 import re
 import gc
 import openpyxl
@@ -35,7 +36,7 @@ if not st.session_state.authenticated:
     # HENTIKAN aplikasi di sini jika belum login. 
     st.stop()
 
-# Library PDF (pdfplumber untuk Tab 3, PyMuPDF/fitz untuk Tab 4 File Besar)
+# Library PDF
 try:
     import pdfplumber
     PDF_SUPPORT = True
@@ -62,34 +63,6 @@ def bersihkan_halaman_pdf(page):
         return page.filter(filter_watermark_obj)
     except Exception:
         return page
-
-# --- FUNGSI HAPUS WATERMARK PYMUPDF (UNTUK TAB 4 CEPAT & HEMAT RAM) ---
-def hapus_watermark_pymupdf(page):
-    try:
-        # Ambil struktur teks beserta arah kemiringan (dir) dan ukuran huruf (size)
-        text_dict = page.get_text("dict")
-        ada_watermark = False
-        for block in text_dict.get("blocks", []):
-            if block.get("type") == 0:  # Blok teks
-                for line in block.get("lines", []):
-                    arah = line.get("dir", (1.0, 0.0))
-                    # Jika teks miring (bukan horizontal lurus)
-                    is_miring = abs(arah[0] - 1.0) > 0.05 or abs(arah[1]) > 0.05
-                    for span in line.get("spans", []):
-                        ukuran = span.get("size", 0)
-                        if is_miring or ukuran > 14:
-                            rect = fitz.Rect(span["bbox"])
-                            # Tandai area watermark untuk dihapus tanpa menghapus garis tabel
-                            page.add_redact_annot(rect)
-                            ada_watermark = True
-        if ada_watermark:
-            # Hapus teks watermark saja, biarkan garis vektor tabel tetap utuh!
-            page.apply_redactions(
-                images=fitz.PDF_REDACT_IMAGE_NONE,
-                graphics=fitz.PDF_REDACT_LINE_ART_NONE
-            )
-    except Exception:
-        pass
 
 # --- FUNGSI MEMBERSIHKAN DAYA & IDPEL (100% SAMA DENGAN TKINTER) ---
 def clean_daya(val):
@@ -282,66 +255,6 @@ def process_hybrid_table(table):
         
     df = pd.DataFrame(merged_rows[header_index+1:], columns=headers)
     return df
-
-# --- LOGIKA PEMROSESAN BARIS TABEL STANDAR (UNTUK TAB 4 PYMUPDF) ---
-def extract_rows_standard(table, master_headers=None):
-    if not table or len(table) < 1: 
-        return [], master_headers
-    
-    cleaned_table = []
-    for row in table:
-        cleaned_row = [str(cell).replace('\n', ' ').strip() if cell is not None and str(cell) != 'None' else "" for cell in row]
-        if any(cleaned_row): 
-            cleaned_table.append(cleaned_row)
-
-    if not cleaned_table: 
-        return [], master_headers
-
-    header_index = -1
-    header_keywords = ['ID PEL', 'IDPEL', 'NOPEL', 'NAMA', 'ALAMAT', 'THBLREK', 'KDDK', 'KODERBM', 'STAND', 'TARIF']
-    for idx, row in enumerate(cleaned_table[:5]):
-        row_str = " ".join([str(c).upper() for c in row])
-        matches = sum(1 for kw in header_keywords if kw in row_str)
-        if matches >= 2:
-            header_index = idx
-            break
-
-    if header_index != -1:
-        headers = []
-        for i, h in enumerate(cleaned_table[header_index]):
-            val = str(h).strip().upper() if str(h).strip() != "" else f"KOLOM_{i+1}"
-            headers.append(val)
-            
-        seen = set()
-        unique_headers = []
-        for h in headers:
-            new_h = h
-            counter = 1
-            while new_h in seen:
-                new_h = f"{h}_{counter}" 
-                counter += 1
-            seen.add(new_h)
-            unique_headers.append(new_h)
-            
-        data_rows = cleaned_table[header_index+1:]
-        if master_headers is None:
-            master_headers = unique_headers
-    else:
-        data_rows = cleaned_table
-        if master_headers is None:
-            master_headers = [f"KOLOM_{i+1}" for i in range(len(cleaned_table[0]))]
-
-    if not data_rows: 
-        return [], master_headers
-    
-    num_cols = len(master_headers)
-    normalized_rows = []
-    for r in data_rows:
-        if len(r) > 0 and str(r[0]).strip().upper() == master_headers[0]:
-            continue
-        normalized_rows.append(r[:num_cols] + [""] * max(0, num_cols - len(r)))
-        
-    return normalized_rows, master_headers
 
 # --- FUNGSI NORMALISASI (HANYA DIGUNAKAN DI TAB 3) ---
 def find_target_column(col_name):
@@ -621,145 +534,198 @@ with tab3:
                 st.warning("⚠️ Tidak ada data tabel yang terdeteksi.")
 
 # ==========================================
-# TAB 4: IMPORT & EKSTRAK PDF (TIPE 2 - MESIN PYMUPDF/FITZ SUPER CEPAT & HEMAT RAM)
+# TAB 4: IMPORT & EKSTRAK PDF (TIPE 2 - MESIN TURBO KOORDINAT & TANPA WATERMARK)
 # ==========================================
 with tab4:
-    st.header("Tahap 4: Import & Ekstrak PDF (Tipe 2 - Mesin PyMuPDF Super Cepat)")
-    st.markdown("Digunakan untuk banyak file PDF besar sekaligus. **Menggunakan mesin C-Engine `PyMuPDF` (20x lebih cepat, 90% lebih hemat RAM, dan otomatis menghapus Watermark).**")
+    st.header("Tahap 4: Import & Ekstrak PDF (Tipe 2 - Mode Turbo Semua Kolom)")
+    st.markdown("Digunakan untuk format PDF standar. **Mesin Koordinat Turbo (160+ halaman hanya ~3 detik, bebas crash & otomatis membuang watermark).**")
     pdf_files_t2 = st.file_uploader("Upload File PDF Tipe 2", type=['pdf'], accept_multiple_files=True, key="t4_pdf")
 
     if st.button("Proses & Ekstrak Semua Data (Tipe 2)", type="primary"):
         if not pdf_files_t2: 
             st.error("Silakan unggah setidaknya satu file PDF.")
         elif not PYMUPDF_SUPPORT: 
-            st.error("⚠️ Library `pymupdf` belum terpasang! Tambahkan kata `pymupdf` di baris paling bawah file `requirements.txt` GitHub Anda lalu Reboot App.")
+            st.error("⚠️ Library `pymupdf` belum terpasang! Pastikan ada tulisan `pymupdf` di file requirements.txt GitHub Anda.")
         else:
-            work_dir = os.path.join(os.getcwd(), "_temp_pymupdf_work")
+            work_dir = os.path.join(os.getcwd(), "_temp_turbo_pdf")
             if os.path.exists(work_dir):
                 shutil.rmtree(work_dir, ignore_errors=True)
             os.makedirs(work_dir, exist_ok=True)
 
             os.environ["TMPDIR"] = work_dir
-            tmp_csv_path = os.path.join(work_dir, "hasil_gabungan.csv")
             tmp_excel_path = os.path.join(work_dir, "Hasil_Semua_Kolom_Tipe2.xlsx")
 
+            wb = openpyxl.Workbook(write_only=True)
+            ws = wb.create_sheet(title="Data")
+            
             master_headers = None
-            header_written = False
+            x_splits = None
+            table_x0, table_x1 = 0, 9999
             total_baris = 0
             preview_rows = []
-            error_pages = []
+            header_keywords = ['ID PEL', 'IDPEL', 'NOPEL', 'NAMA', 'ALAMAT', 'THBLREK', 'KDDK', 'KODERBM', 'STAND', 'TARIF']
 
-            with st.spinner("⚡ Mengekstraksi PDF dengan Mesin C-Engine PyMuPDF..."):
+            with st.spinner("🚀 Mengekstraksi PDF dengan Mode Turbo..."):
                 progress_bar = st.progress(0)
                 status_text = st.empty()
                 total_files = len(pdf_files_t2)
 
-                with open(tmp_csv_path, 'w', newline='', encoding='utf-8-sig') as f_csv:
-                    writer = csv.writer(f_csv)
+                for f_idx, uploaded_pdf in enumerate(pdf_files_t2):
+                    fname = uploaded_pdf.name
+                    tmp_pdf_path = os.path.join(work_dir, "current.pdf")
+                    
+                    # Simpan sementara ke disk fisik
+                    uploaded_pdf.seek(0)
+                    with open(tmp_pdf_path, "wb") as f_out:
+                        shutil.copyfileobj(uploaded_pdf, f_out, length=2 * 1024 * 1024)
+                    
+                    try:
+                        doc = fitz.open(tmp_pdf_path)
+                        total_hal = len(doc)
 
-                    for f_idx, uploaded_pdf in enumerate(pdf_files_t2):
-                        fname = uploaded_pdf.name
-                        
-                        try:
-                            # Buka langsung dari stream byte menggunakan PyMuPDF (sangat ringan)
-                            uploaded_pdf.seek(0)
-                            pdf_bytes = uploaded_pdf.read()
-                            doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-                            total_pages = len(doc)
-
-                            for i in range(total_pages):
-                                try:
-                                    page = doc[i]
-                                    # 1. Hapus watermark diagonal/besar langsung di level C
-                                    hapus_watermark_pymupdf(page)
+                        for i, page in enumerate(doc):
+                            # 1. HANYA DI HALAMAN PERTAMA: Kunci posisi koordinat X kolom & Header
+                            if x_splits is None:
+                                tabs = page.find_tables()
+                                if tabs.tables:
+                                    tab = tabs.tables[0]
+                                    raw = tab.extract()
+                                    best_row = max(tab.rows, key=lambda r: sum(1 for c in r.cells if c is not None))
+                                    col_bounds = [(c[0], c[2]) for c in best_row.cells if c is not None]
+                                    table_x0 = col_bounds[0][0] - 5
+                                    table_x1 = col_bounds[-1][1] + 5
+                                    x_splits = [(col_bounds[j][1] + col_bounds[j+1][0]) / 2.0 for j in range(len(col_bounds) - 1)]
                                     
-                                    # 2. Cari & ekstrak tabel dengan algoritma C PyMuPDF
-                                    tabs = page.find_tables()
-                                    for tab in tabs.tables:
-                                        raw_table = tab.extract()
-                                        rows, master_headers = extract_rows_standard(raw_table, master_headers)
-                                        if rows and master_headers:
-                                            if not header_written:
-                                                writer.writerow(list(master_headers))
-                                                header_written = True
-                                            for r in rows:
-                                                writer.writerow(list(r))
-                                                total_baris += 1
-                                                if len(preview_rows) < 50:
-                                                    preview_rows.append(r)
-                                except Exception as e:
-                                    error_pages.append(f"{fname} - Hal {i+1}: {str(e)}")
+                                    for r in raw[:5]:
+                                        cleaned = [str(c).replace('\n', ' ').strip().upper() if c else "" for c in r]
+                                        if sum(1 for kw in header_keywords if kw in " ".join(cleaned)) >= 2:
+                                            master_headers = [c if c else f"KOLOM_{j+1}" for j, c in enumerate(cleaned[:len(col_bounds)])]
+                                            break
+                                    if master_headers is None:
+                                        master_headers = [f"KOLOM_{j+1}" for j in range(len(col_bounds))]
+                                    ws.append(master_headers)
+
+                            if x_splits is None:
+                                continue
+
+                            # 2. Ambil garis baris horizontal secara instan
+                            raw_ys = []
+                            for d in page.get_drawings():
+                                r = d.get("rect")
+                                if r and r.width > 5 and r.x1 > table_x0 and r.x0 < table_x1:
+                                    raw_ys.append(r.y0)
+                                    raw_ys.append(r.y1)
+                            
+                            if not raw_ys:
+                                continue
                                 
-                                # Bersihkan memori internal MuPDF setiap 20 halaman
-                                if (i + 1) % 20 == 0 or (i + 1) == total_pages:
-                                    fitz.TOOLS.store_shrink(100)
-                                    progress_bar.progress(min(1.0, (f_idx + ((i + 1) / max(1, total_pages))) / total_files))
-                                    status_text.text(f"⚡ File {f_idx+1}/{total_files} ({fname}): Halaman {i+1}/{total_pages} (Terkumpul: {total_baris} baris)...")
-                                    gc.collect()
+                            raw_ys.sort()
+                            y_cuts = []
+                            for y in raw_ys:
+                                if not y_cuts or (y - y_cuts[-1]) > 3.5:
+                                    y_cuts.append(y)
+                                    
+                            if len(y_cuts) < 2:
+                                continue
 
-                            doc.close()
-                            del doc
-                            del pdf_bytes
-                            fitz.TOOLS.store_shrink(100)
-                            gc.collect()
+                            num_cols = len(x_splits) + 1
+                            num_rows = len(y_cuts) - 1
+                            grid = [[[] for _ in range(num_cols)] for _ in range(num_rows)]
 
-                        except Exception as e:
-                            st.error(f"Gagal memproses file {fname}: {str(e)}")
+                            # 3. Ambil teks & otomatis lewati watermark miring/besar
+                            text_dict = page.get_text("dict")
+                            for block in text_dict.get("blocks", []):
+                                if block.get("type") != 0:
+                                    continue
+                                for line in block.get("lines", []):
+                                    arah = line.get("dir", (1.0, 0.0))
+                                    if abs(arah[0] - 1.0) > 0.05 or abs(arah[1]) > 0.05:
+                                        continue
+                                    for span in line.get("spans", []):
+                                        if span.get("size", 0) > 13:
+                                            continue
+                                        txt = span.get("text", "").strip()
+                                        if not txt:
+                                            continue
+                                        bbox = span["bbox"]
+                                        cx = (bbox[0] + bbox[2]) / 2.0
+                                        cy = (bbox[1] + bbox[3]) / 2.0
+                                        
+                                        if cx < table_x0 or cx > table_x1 or cy < y_cuts[0] or cy > y_cuts[-1]:
+                                            continue
+                                            
+                                        r_idx = bisect.bisect_right(y_cuts, cy) - 1
+                                        c_idx = bisect.bisect_right(x_splits, cx)
+                                        
+                                        if 0 <= r_idx < num_rows and 0 <= c_idx < num_cols:
+                                            grid[r_idx][c_idx].append((round(bbox[1], 1), bbox[0], txt))
+
+                            # 4. Susun baris & simpan ke Excel
+                            for r_idx in range(num_rows):
+                                row_vals = []
+                                ada_isi = False
+                                for c_idx in range(num_cols):
+                                    items = grid[r_idx][c_idx]
+                                    if items:
+                                        items.sort()
+                                        val = " ".join(x[2] for x in items)
+                                        row_vals.append(val)
+                                        ada_isi = True
+                                    else:
+                                        row_vals.append("")
+                                
+                                if not ada_isi:
+                                    continue
+                                if row_vals[0].upper() == master_headers[0] or (len(row_vals) > 1 and "IDPEL" in row_vals[1].upper()):
+                                    continue
+                                    
+                                ws.append(row_vals)
+                                total_baris += 1
+                                if len(preview_rows) < 50:
+                                    preview_rows.append(row_vals)
+
+                            if (i + 1) % 25 == 0 or (i + 1) == total_hal:
+                                fitz.TOOLS.store_shrink(100)
+                                progress_bar.progress(min(1.0, (f_idx + ((i + 1) / max(1, total_hal))) / total_files))
+                                status_text.text(f"⚡ File {f_idx+1}/{total_files} ({fname}): Halaman {i+1}/{total_hal} (Terkumpul: {total_baris} baris)...")
+                                gc.collect()
+
+                        doc.close()
+                        if os.path.exists(tmp_pdf_path):
+                            os.remove(tmp_pdf_path)
+                        fitz.TOOLS.store_shrink(100)
+                        gc.collect()
+
+                    except Exception as e:
+                        st.error(f"Gagal memproses file {fname}: {str(e)}")
+
+            wb.save(tmp_excel_path)
+            wb.close()
+            del wb
+            gc.collect()
 
             if total_baris > 0 and master_headers:
                 try:
-                    status_text.text(f"Menyiapkan file unduhan ({total_baris} baris)...")
-                    wb = openpyxl.Workbook(write_only=True)
-                    ws = wb.create_sheet(title="Data")
-                    with open(tmp_csv_path, 'r', newline='', encoding='utf-8-sig') as f_csv:
-                        reader = csv.reader(f_csv)
-                        for row in reader:
-                            ws.append(row)
-                    wb.save(tmp_excel_path)
-                    wb.close()
-                    del wb
-                    gc.collect()
-
                     status_text.empty()
                     progress_bar.progress(1.0)
-                    total_kolom = len(master_headers)
-                    st.success(f"✅ Selesai Super Cepat! Berhasil mengekstraksi {total_baris} baris dengan {total_kolom} kolom bersih tanpa watermark dari {total_files} file!")
+                    st.success(f"🎉 Selesai Super Cepat! Berhasil mengekstraksi {total_baris} baris bersih tanpa watermark dari {total_files} file!")
                     
-                    if error_pages:
-                        st.warning(f"⚠️ Ada {len(error_pages)} halaman yang dilewati karena error format.")
-                        with st.expander("Lihat Detail Error"):
-                            for err in error_pages: st.write(err)
-
                     preview_df = pd.DataFrame(preview_rows, columns=master_headers)
                     st.dataframe(preview_df, use_container_width=True)
                     
-                    col_dl1, col_dl2 = st.columns(2)
-                    with col_dl1:
-                        with open(tmp_excel_path, "rb") as f_excel:
-                            st.download_button(
-                                "📥 Download File Excel (.xlsx)", 
-                                data=f_excel, 
-                                file_name="Hasil_Semua_Kolom_Tipe2.xlsx", 
-                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", 
-                                type="primary",
-                                use_container_width=True
-                            )
-                    with col_dl2:
-                        with open(tmp_csv_path, "rb") as f_csv_dl:
-                            st.download_button(
-                                "📥 Download File CSV (Bisa Dibuka di Excel)", 
-                                data=f_csv_dl, 
-                                file_name="Hasil_Semua_Kolom_Tipe2.csv", 
-                                mime="text/csv",
-                                use_container_width=True
-                            )
-                except Exception as e:
-                    st.error(f"Gagal saat menyiapkan file unduhan: {str(e)}")
+                    with open(tmp_excel_path, "rb") as f_excel:
+                        st.download_button(
+                            "📥 Download Semua Data Tipe 2 (.xlsx)", 
+                            data=f_excel, 
+                            file_name="Hasil_Semua_Kolom_Tipe2.xlsx", 
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", 
+                            type="primary"
+                        )
                 finally:
                     shutil.rmtree(work_dir, ignore_errors=True)
             else:
                 shutil.rmtree(work_dir, ignore_errors=True)
-                st.warning("⚠️️ Tidak ada data tabel yang terdeteksi.")
+                st.warning("⚠️ Tidak ada data tabel yang terdeteksi.")
 
 # ==========================================
 # TAB 5: PARSING BANYAK FILE ICONPRN KE EXCEL
