@@ -49,6 +49,50 @@ try:
 except ImportError:
     PYMUPDF_SUPPORT = False
 
+# --- KONFIGURASI & FUNGSI GLOBAL SUPABASE ---
+SUPABASE_URL = "https://wnzedfyiublmzmjkzsrq.supabase.co" 
+SUPABASE_KEY = "sb_publishable_g1WlECVLkTdNBMwL2QxWlA_gOu6l4VR"
+SUPABASE_TABLE = "dataplg3"
+
+HEADER_MASTER_SUPABASE = [
+    "IDPEL", "KDDK", "NAMA", "ALAMAT", "TARIF", "DAYA", 
+    "NOMOR GARDU", "NOTIANG", "MEREKKWH", "NOMORKWH", 
+    "KOORDINAT X", "KOORDINAT Y", "NOIDENTITAS", "NO HP"
+]
+
+@st.cache_resource
+def init_koneksi():
+    from supabase import create_client
+    return create_client(SUPABASE_URL, SUPABASE_KEY)
+
+@st.cache_data(ttl=1800, max_entries=2, show_spinner=False)
+def fetch_master_supabase(columns="*"):
+    """Mengambil seluruh data master dari Supabase (tabel dataplg3) secara bertahap (pagination) agar tidak terpotong limit 1000 baris."""
+    client = init_koneksi()
+    all_rows = []
+    batch_size = 1000
+    start = 0
+    
+    while True:
+        respon = client.table(SUPABASE_TABLE).select(columns).range(start, start + batch_size - 1).execute()
+        data = respon.data
+        if not data:
+            break
+        all_rows.extend(data)
+        if len(data) < batch_size:
+            break
+        start += batch_size
+        
+    df = pd.DataFrame(all_rows)
+    return df
+
+def tampilkan_info_header_master():
+    st.info(
+        "📋 **Keterangan Header Kolom Master (`dataplg3` di Supabase):**\n\n"
+        "`IDPEL` | `KDDK` *(otomatis dipetakan ke KOKED)* | `NAMA` | `ALAMAT` | `TARIF` *(otomatis dipetakan ke TARIP)* | "
+        "`DAYA` | `NOMOR GARDU` | `NOTIANG` | `MEREKKWH` | `NOMORKWH` | `KOORDINAT X` | `KOORDINAT Y` | `NOIDENTITAS` | `NO HP`"
+    )
+
 # --- FUNGSI FILTER WATERMARK PDFPLUMBER (UNTUK TAB 3) ---
 def filter_watermark_obj(obj):
     if obj.get("object_type") == "char":
@@ -148,6 +192,33 @@ def baca_ekstrak_tabel(uploaded_file):
     df = df.loc[:, ~df.columns.duplicated(keep='first')]
     
     return df, fname
+
+def siapkan_df_master_standar(df, tipe_data='master'):
+    """Menstandarkan DataFrame dari Supabase agar sesuai dengan struktur kolom Tahap 1 & Tahap 2."""
+    if df.empty:
+        return pd.DataFrame()
+    df = df.copy()
+    df.columns = df.columns.astype(str).str.strip().str.upper()
+    df = df.rename(columns={'KDDK': 'KOKED', 'TARIF': 'TARIP', 'NAMAPNJ': 'ALAMAT'})
+    df = df.loc[:, ~df.columns.duplicated(keep='first')]
+
+    if 'IDPEL' not in df.columns:
+        raise ValueError("Kolom 'IDPEL' tidak ditemukan di Data Master Supabase.")
+
+    if tipe_data == 'master':
+        for col in ['NAMA', 'ALAMAT', 'KOKED', 'TARIP']:
+            if col not in df.columns: df[col] = ''
+        if 'DAYA' not in df.columns: df['DAYA'] = 0
+        df['IDPEL'] = df['IDPEL'].apply(clean_idpel)
+        df['DAYA'] = df['DAYA'].apply(clean_daya)
+        df['KOKED'] = df['KOKED'].astype(str).str.strip()
+        return df[['IDPEL', 'NAMA', 'ALAMAT', 'KOKED', 'TARIP', 'DAYA']].drop_duplicates(subset=['IDPEL'], keep='first').reset_index(drop=True)
+    elif tipe_data == 'lama':
+        if 'KOKED' not in df.columns: df['KOKED'] = ''
+        df['IDPEL'] = df['IDPEL'].apply(clean_idpel)
+        df['KOKED'] = df['KOKED'].astype(str).str.strip()
+        return df[['IDPEL', 'KOKED']].drop_duplicates(subset=['IDPEL'], keep='first').reset_index(drop=True)
+    return df
 
 def proses_list_file(files, tipe_data):
     list_df = []
@@ -337,17 +408,30 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10 = st.tabs([
 ])
 
 # ==========================================
-# TAB 1: PERSIAPAN DATA (SUDAH DISESUAIKAN DENGAN SCRIPT KEDUA)
+# TAB 1: PERSIAPAN DATA
 # ==========================================
 with tab1:
     st.header("Tahap 1: Memecah Data Untuk Petugas Lapangan")
     st.markdown("Digunakan untuk membuat data perpetugas buat koked, data pelanggan baru, dan data master")
+    tampilkan_info_header_master()
+    
     col1, col2 = st.columns(2)
     with col1:
         files_baru = st.file_uploader("[Tahap 1] Data Server Bulan INI", accept_multiple_files=True, key="t1_baru")
         files_lama = st.file_uploader("[Tahap 1] Data Bulan LALU", accept_multiple_files=True, key="t1_lama")
     with col2:
-        files_master = st.file_uploader("[Tahap 1] Data Master (Ganti ***)", accept_multiple_files=True, key="t1_master")
+        sumber_master_t1 = st.radio(
+            "Sumber Data Master (Ganti ***):",
+            ["Upload File (.xlsx / .dbf)", "Ambil dari Supabase (dataplg3)"],
+            horizontal=True,
+            key="sumber_master_t1"
+        )
+        if sumber_master_t1 == "Upload File (.xlsx / .dbf)":
+            files_master = st.file_uploader("[Tahap 1] Data Master (Ganti ***)", accept_multiple_files=True, key="t1_master")
+        else:
+            files_master = None
+            st.success("✅ Data Master akan diambil otomatis dari Supabase (`IDPEL, KDDK, NAMA, ALAMAT, TARIF, DAYA`).")
+            
         files_suppb = st.file_uploader("[Tahap 1] Data PB Baru", accept_multiple_files=True, key="t1_suppb")
 
     if st.button("Proses Tahap 1", type="primary"):
@@ -357,7 +441,13 @@ with tab1:
                 try:
                     df_baru = proses_list_file(files_baru, 'baru')
                     df_lama = proses_list_file(files_lama, 'lama')
-                    df_master = proses_list_file(files_master, 'master') if files_master else pd.DataFrame()
+                    
+                    if sumber_master_t1 == "Ambil dari Supabase (dataplg3)":
+                        df_sup_raw = fetch_master_supabase("IDPEL,KDDK,NAMA,ALAMAT,TARIF,DAYA")
+                        df_master = siapkan_df_master_standar(df_sup_raw, 'master')
+                    else:
+                        df_master = proses_list_file(files_master, 'master') if files_master else pd.DataFrame()
+                        
                     df_sup_pb = proses_list_file(files_suppb, 'sup_pb') if files_suppb else pd.DataFrame()
 
                     if df_baru.empty: raise ValueError("Data Bulan Ini kosong atau gagal dibaca.")
@@ -449,20 +539,37 @@ with tab1:
 with tab2:
     st.header("Tahap 2: Gabung File Petugas & Mutasi KOKED")
     st.markdown("Digunakan untuk membuat hasil koked untuk di upload di PLN")
+    tampilkan_info_header_master()
+    
     col3, col4 = st.columns(2)
     with col3: 
         files_petugas = st.file_uploader("[Tahap 2] Data Hasil Kerja Petugas", accept_multiple_files=True, key="t2_petugas")
-    with col4: 
-        files_lama_pembanding = st.file_uploader("[Tahap 2] Data Master / Bulan Sekarang", accept_multiple_files=True, key="t2_lama")
+    with col4:
+        sumber_master_t2 = st.radio(
+            "Sumber Data Master / Pembanding:",
+            ["Upload File (.xlsx / .dbf)", "Ambil dari Supabase (dataplg3)"],
+            horizontal=True,
+            key="sumber_master_t2"
+        )
+        if sumber_master_t2 == "Upload File (.xlsx / .dbf)":
+            files_lama_pembanding = st.file_uploader("[Tahap 2] Data Master / Bulan Sekarang", accept_multiple_files=True, key="t2_lama")
+        else:
+            files_lama_pembanding = None
+            st.success("✅ Data Master Pembanding (`IDPEL, KDDK`) akan diambil otomatis dari Supabase.")
 
     if st.button("Proses Tahap 2", type="primary"):
-        if not files_petugas or not files_lama_pembanding: 
-            st.error("Silakan unggah Data Hasil Kerja Petugas dan Data Master / Bulan Sekarang.")
+        if not files_petugas or (sumber_master_t2 == "Upload File (.xlsx / .dbf)" and not files_lama_pembanding): 
+            st.error("Silakan unggah Data Hasil Kerja Petugas dan pilih/unggah Data Master Pembanding.")
         else:
             with st.spinner("Membandingkan KOKED..."):
                 try:
                     df_petugas = proses_list_file(files_petugas, 'petugas')
-                    df_lama_pem = proses_list_file(files_lama_pembanding, 'lama')
+                    
+                    if sumber_master_t2 == "Ambil dari Supabase (dataplg3)":
+                        df_sup_t2 = fetch_master_supabase("IDPEL,KDDK")
+                        df_lama_pem = siapkan_df_master_standar(df_sup_t2, 'lama')
+                    else:
+                        df_lama_pem = proses_list_file(files_lama_pembanding, 'lama')
 
                     df_petugas.columns = df_petugas.columns.astype(str).str.strip().str.upper()
                     df_lama_pem.columns = df_lama_pem.columns.astype(str).str.strip().str.upper()
@@ -574,7 +681,6 @@ with tab4:
                     fname = uploaded_pdf.name
                     tmp_pdf_path = os.path.join(work_dir, "current.pdf")
                     
-                    # Simpan sementara ke disk fisik
                     uploaded_pdf.seek(0)
                     with open(tmp_pdf_path, "wb") as f_out:
                         shutil.copyfileobj(uploaded_pdf, f_out, length=2 * 1024 * 1024)
@@ -584,7 +690,6 @@ with tab4:
                         total_hal = len(doc)
 
                         for i, page in enumerate(doc):
-                            # 1. HANYA DI HALAMAN PERTAMA: Kunci posisi koordinat X kolom & Header
                             if x_splits is None:
                                 tabs = page.find_tables()
                                 if tabs.tables:
@@ -608,7 +713,6 @@ with tab4:
                             if x_splits is None:
                                 continue
 
-                            # 2. Ambil garis baris horizontal secara instan
                             raw_ys = []
                             for d in page.get_drawings():
                                 r = d.get("rect")
@@ -632,7 +736,6 @@ with tab4:
                             num_rows = len(y_cuts) - 1
                             grid = [[[] for _ in range(num_cols)] for _ in range(num_rows)]
 
-                            # 3. Ambil teks & otomatis lewati watermark miring/besar
                             text_dict = page.get_text("dict")
                             for block in text_dict.get("blocks", []):
                                 if block.get("type") != 0:
@@ -660,7 +763,6 @@ with tab4:
                                         if 0 <= r_idx < num_rows and 0 <= c_idx < num_cols:
                                             grid[r_idx][c_idx].append((round(bbox[1], 1), bbox[0], txt))
 
-                            # 4. Susun baris & simpan ke Excel
                             for r_idx in range(num_rows):
                                 row_vals = []
                                 ada_isi = False
@@ -863,20 +965,35 @@ with tab5:
 with tab6:
     st.header("Tahap 6: Update Master Data Pelanggan")
     st.markdown("Meng-update data master lama dengan data baru berdasarkan IDPEL. Data bersimbol bintang (`*`) tidak akan menimpa data master.")
+    tampilkan_info_header_master()
     
     col_t6_1, col_t6_2 = st.columns(2)
     with col_t6_1:
-        file_lama_m = st.file_uploader("Upload File Excel Data LAMA", type=['xlsx', 'xls'], key="t6_lama")
+        sumber_lama_t6 = st.radio(
+            "Sumber Data Master LAMA:",
+            ["Upload File Excel", "Ambil dari Supabase (dataplg3)"],
+            horizontal=True,
+            key="sumber_lama_t6"
+        )
+        if sumber_lama_t6 == "Upload File Excel":
+            file_lama_m = st.file_uploader("Upload File Excel Data LAMA", type=['xlsx', 'xls'], key="t6_lama")
+        else:
+            file_lama_m = None
+            st.success("✅ Data LAMA akan diambil otomatis dari tabel `dataplg3` Supabase (14 kolom penuh).")
     with col_t6_2:
         file_baru_m = st.file_uploader("Upload File Excel Data BARU", type=['xlsx', 'xls'], key="t6_baru")
 
     if st.button("Proses Update Master Data", type="primary"):
-        if not file_lama_m or not file_baru_m:
-            st.error("Silakan unggah kedua file Excel (Data Lama & Data Baru).")
+        if (sumber_lama_t6 == "Upload File Excel" and not file_lama_m) or not file_baru_m:
+            st.error("Silakan lengkapi Data Lama (Upload/Supabase) & unggah file Excel Data Baru.")
         else:
             with st.spinner("Memproses sinkronisasi master data..."):
                 try:
-                    df_lama = pd.read_excel(file_lama_m, dtype=str)
+                    if sumber_lama_t6 == "Ambil dari Supabase (dataplg3)":
+                        df_lama = fetch_master_supabase("*").astype(str)
+                    else:
+                        df_lama = pd.read_excel(file_lama_m, dtype=str)
+                        
                     df_baru = pd.read_excel(file_baru_m, dtype=str)
 
                     kolom_asli_lama = df_lama.columns.tolist()
@@ -884,14 +1001,28 @@ with tab6:
                     df_lama.columns = df_lama.columns.astype(str).str.strip().str.lower()
                     df_baru.columns = df_baru.columns.astype(str).str.strip().str.lower()
 
+                    # Samakan alias nama kolom umum bila memakai master Supabase
+                    if 'kddk' in df_lama.columns and 'koked' in df_baru.columns and 'kddk' not in df_baru.columns:
+                        df_baru.rename(columns={'koked': 'kddk'}, inplace=True)
+                    elif 'koked' in df_lama.columns and 'kddk' in df_baru.columns and 'koked' not in df_baru.columns:
+                        df_baru.rename(columns={'kddk': 'koked'}, inplace=True)
+
+                    if 'tarif' in df_lama.columns and 'tarip' in df_baru.columns and 'tarif' not in df_baru.columns:
+                        df_baru.rename(columns={'tarip': 'tarif'}, inplace=True)
+                    elif 'tarip' in df_lama.columns and 'tarif' in df_baru.columns and 'tarip' not in df_baru.columns:
+                        df_baru.rename(columns={'tarif': 'tarip'}, inplace=True)
+
                     kolom_yang_sama = df_baru.columns.intersection(df_lama.columns)
                     df_baru = df_baru[kolom_yang_sama]
 
                     if 'idpel' not in df_lama.columns or 'idpel' not in df_baru.columns:
-                        st.error("❌ Kolom 'IDPEL' tidak ditemukan di salah satu file!")
+                        st.error("❌ Kolom 'IDPEL' tidak ditemukan di salah satu sumber data!")
                     else:
                         df_lama['idpel'] = df_lama['idpel'].str.replace('.0', '', regex=False).str.strip()
                         df_baru['idpel'] = df_baru['idpel'].str.replace('.0', '', regex=False).str.strip()
+
+                        df_lama = df_lama.drop_duplicates(subset=['idpel'], keep='first')
+                        df_baru = df_baru.drop_duplicates(subset=['idpel'], keep='first')
 
                         df_lama.set_index('idpel', inplace=True)
                         df_baru.set_index('idpel', inplace=True)
@@ -904,7 +1035,7 @@ with tab6:
                             def bersihkan_sel(val):
                                 if pd.isna(val): return np.nan
                                 s = str(val).strip()
-                                if '*' in s or s.lower() == 'nan' or s == '':
+                                if '*' in s or s.lower() in ['nan', 'none', '<na>'] or s == '':
                                     return np.nan
                                 return val
 
@@ -939,14 +1070,7 @@ with tab6:
 with tab7:
     st.header("Tahap 7: Info Data & Lokasi Pelanggan")
     st.markdown("Digunakan untuk mencari data pelanggan berdasar idpel, nama, nomormeter")
-    
-    SUPABASE_URL = "https://wnzedfyiublmzmjkzsrq.supabase.co" 
-    SUPABASE_KEY = "sb_publishable_g1WlECVLkTdNBMwL2QxWlA_gOu6l4VR"
-    
-    @st.cache_resource
-    def init_koneksi():
-        from supabase import create_client
-        return create_client(SUPABASE_URL, SUPABASE_KEY)
+    tampilkan_info_header_master()
     
     try:
         supabase = init_koneksi()
@@ -1022,21 +1146,36 @@ with tab7:
 with tab8:
     st.header("Tahap 8: Update Master Data Pelanggan (Versi 2)")
     st.write("Mengisi kolom yang KOSONG di Data Lama dengan data dari Data Baru berdasarkan IDPEL. TIDAK MENAMBAH KOLOM BARU dan data yang sudah terisi TIDAK akan ditimpa.")
+    tampilkan_info_header_master()
     st.markdown("---")
 
     col_l, col_b = st.columns(2)
     with col_l:
-        file_lama = st.file_uploader("Upload File Excel Data LAMA", type=['xlsx', 'xls'], key="t8_lama")
+        sumber_lama_t8 = st.radio(
+            "Sumber Data Master LAMA:",
+            ["Upload File Excel", "Ambil dari Supabase (dataplg3)"],
+            horizontal=True,
+            key="sumber_lama_t8"
+        )
+        if sumber_lama_t8 == "Upload File Excel":
+            file_lama = st.file_uploader("Upload File Excel Data LAMA", type=['xlsx', 'xls'], key="t8_lama")
+        else:
+            file_lama = None
+            st.success("✅ Data LAMA akan diambil otomatis dari tabel `dataplg3` Supabase.")
     with col_b:
         file_baru = st.file_uploader("Upload File Excel Data BARU", type=['xlsx', 'xls'], key="t8_baru")
 
     if st.button("Proses Update Master Data (Tab 8)", type="primary"):
-        if not file_lama or not file_baru:
-            st.warning("⚠️ Harap upload KEDUA file Excel (Data Lama & Data Baru)!")
+        if (sumber_lama_t8 == "Upload File Excel" and not file_lama) or not file_baru:
+            st.warning("⚠️ Harap lengkapi Data Lama (Upload/Supabase) & upload file Excel Data Baru!")
         else:
             with st.spinner("Sedang memproses update data..."):
                 try:
-                    df_lama = pd.read_excel(file_lama, dtype=str)
+                    if sumber_lama_t8 == "Ambil dari Supabase (dataplg3)":
+                        df_lama = fetch_master_supabase("*").astype(str)
+                    else:
+                        df_lama = pd.read_excel(file_lama, dtype=str)
+                        
                     df_baru = pd.read_excel(file_baru, dtype=str)
 
                     def buat_kolom_unik(daftar_kolom):
@@ -1057,13 +1196,24 @@ with tab8:
                     df_lama.columns = buat_kolom_unik(cols_lama)
                     df_baru.columns = buat_kolom_unik(cols_baru)
                     
+                    # Samakan alias nama kolom umum bila memakai master Supabase
+                    if 'kddk' in df_lama.columns and 'koked' in df_baru.columns and 'kddk' not in df_baru.columns:
+                        df_baru.rename(columns={'koked': 'kddk'}, inplace=True)
+                    elif 'koked' in df_lama.columns and 'kddk' in df_baru.columns and 'koked' not in df_baru.columns:
+                        df_baru.rename(columns={'kddk': 'koked'}, inplace=True)
+
+                    if 'tarif' in df_lama.columns and 'tarip' in df_baru.columns and 'tarif' not in df_baru.columns:
+                        df_baru.rename(columns={'tarip': 'tarif'}, inplace=True)
+                    elif 'tarip' in df_lama.columns and 'tarif' in df_baru.columns and 'tarip' not in df_baru.columns:
+                        df_baru.rename(columns={'tarif': 'tarip'}, inplace=True)
+
                     kolom_format_lama = df_lama.columns.tolist()
 
                     if 'idpel' not in df_lama.columns or 'idpel' not in df_baru.columns:
-                        st.error("❌ Kedua file harus memiliki kolom 'IDPEL'!")
+                        st.error("❌ Kedua sumber data harus memiliki kolom 'IDPEL'!")
                     else:
-                        df_lama = df_lama.replace(r'^\s*$', np.nan, regex=True).replace(['nan', 'NaN', '<NA>'], np.nan)
-                        df_baru = df_baru.replace(r'^\s*$', np.nan, regex=True).replace(['nan', 'NaN', '<NA>'], np.nan)
+                        df_lama = df_lama.replace(r'^\s*$', np.nan, regex=True).replace(['nan', 'NaN', '<NA>', 'None'], np.nan)
+                        df_baru = df_baru.replace(r'^\s*$', np.nan, regex=True).replace(['nan', 'NaN', '<NA>', 'None'], np.nan)
 
                         for col in df_lama.columns:
                             df_lama[col] = df_lama[col].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
@@ -1073,6 +1223,7 @@ with tab8:
                             df_baru[col] = df_baru[col].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
                             df_baru[col] = df_baru[col].replace(['nan', 'None', '<NA>'], np.nan)
 
+                        df_lama = df_lama.drop_duplicates(subset=['idpel'], keep='first')
                         df_baru = df_baru.drop_duplicates(subset=['idpel'], keep='first')
 
                         df_lama.set_index('idpel', inplace=True)
