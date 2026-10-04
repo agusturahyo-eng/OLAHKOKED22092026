@@ -67,7 +67,7 @@ def init_koneksi():
 
 @st.cache_data(ttl=1800, max_entries=2, show_spinner=False)
 def fetch_master_supabase(columns="*"):
-    """Mengambil seluruh data master dari Supabase (tabel dataplg3) secara bertahap (pagination) agar tidak terpotong limit 1000 baris."""
+    """Mengambil seluruh data master dari Supabase (tabel dataplg3) secara bertahap (pagination)."""
     client = init_koneksi()
     all_rows = []
     batch_size = 1000
@@ -960,57 +960,59 @@ with tab5:
                     st.warning("⚠️ Tidak ada data tagihan valid yang ditemukan.")
 
 # ==========================================
-# TAB 6: APLIKASI UPDATE MASTER DATA
+# TAB 6: APLIKASI UPDATE / LENGKAPI DATA DARI MASTER
 # ==========================================
 with tab6:
-    st.header("Tahap 6: Update Master Data Pelanggan")
-    st.markdown("Meng-update data master lama dengan data baru berdasarkan IDPEL. Data bersimbol bintang (`*`) tidak akan menimpa data master.")
+    st.header("Tahap 6: Update / Lengkapi Data dari Master Data")
+    st.markdown("Meng-update / melengkapi **Data LAMA (file yang ingin dicarikan datanya)** menggunakan **Data BARU (Master Data)** berdasarkan IDPEL. Data bersimbol bintang (`*`) tidak akan menimpa data.")
     tampilkan_info_header_master()
     
     col_t6_1, col_t6_2 = st.columns(2)
     with col_t6_1:
-        sumber_lama_t6 = st.radio(
-            "Sumber Data Master LAMA:",
+        file_lama_m = st.file_uploader("Upload File Excel Data LAMA (Data yang ingin dilengkapi)", type=['xlsx', 'xls'], key="t6_lama")
+    with col_t6_2:
+        sumber_baru_t6 = st.radio(
+            "Sumber Data BARU (Master Data Referensi):",
             ["Upload File Excel", "Ambil dari Supabase (dataplg3)"],
             horizontal=True,
-            key="sumber_lama_t6"
+            key="sumber_baru_t6"
         )
-        if sumber_lama_t6 == "Upload File Excel":
-            file_lama_m = st.file_uploader("Upload File Excel Data LAMA", type=['xlsx', 'xls'], key="t6_lama")
+        if sumber_baru_t6 == "Upload File Excel":
+            file_baru_m = st.file_uploader("Upload File Excel Data BARU (Master Data)", type=['xlsx', 'xls'], key="t6_baru")
+            tambah_baris_baru_t6 = st.checkbox("Tambahkan juga IDPEL baru dari file kedua jika belum ada di file pertama", value=True, key="t6_add_new")
         else:
-            file_lama_m = None
-            st.success("✅ Data LAMA akan diambil otomatis dari tabel `dataplg3` Supabase (14 kolom penuh).")
-    with col_t6_2:
-        file_baru_m = st.file_uploader("Upload File Excel Data BARU", type=['xlsx', 'xls'], key="t6_baru")
+            file_baru_m = None
+            tambah_baris_baru_t6 = False
+            st.success("✅ Data BARU (Master Data) akan diambil otomatis dari tabel `dataplg3` Supabase.")
 
-    if st.button("Proses Update Master Data", type="primary"):
-        if (sumber_lama_t6 == "Upload File Excel" and not file_lama_m) or not file_baru_m:
-            st.error("Silakan lengkapi Data Lama (Upload/Supabase) & unggah file Excel Data Baru.")
+    if st.button("Proses Update Data (Tab 6)", type="primary"):
+        if not file_lama_m or (sumber_baru_t6 == "Upload File Excel" and not file_baru_m):
+            st.error("Silakan unggah File Data LAMA dan pilih/unggah Sumber Data BARU (Master).")
         else:
-            with st.spinner("Memproses sinkronisasi master data..."):
+            with st.spinner("Memproses sinkronisasi dari master data..."):
                 try:
-                    if sumber_lama_t6 == "Ambil dari Supabase (dataplg3)":
-                        df_lama = fetch_master_supabase("*").astype(str)
+                    df_lama = pd.read_excel(file_lama_m, dtype=str)
+                    
+                    if sumber_baru_t6 == "Ambil dari Supabase (dataplg3)":
+                        df_baru = fetch_master_supabase("*").astype(str)
                     else:
-                        df_lama = pd.read_excel(file_lama_m, dtype=str)
-                        
-                    df_baru = pd.read_excel(file_baru_m, dtype=str)
+                        df_baru = pd.read_excel(file_baru_m, dtype=str)
 
                     kolom_asli_lama = df_lama.columns.tolist()
 
                     df_lama.columns = df_lama.columns.astype(str).str.strip().str.lower()
                     df_baru.columns = df_baru.columns.astype(str).str.strip().str.lower()
 
-                    # Samakan alias nama kolom umum bila memakai master Supabase
-                    if 'kddk' in df_lama.columns and 'koked' in df_baru.columns and 'kddk' not in df_baru.columns:
-                        df_baru.rename(columns={'koked': 'kddk'}, inplace=True)
-                    elif 'koked' in df_lama.columns and 'kddk' in df_baru.columns and 'koked' not in df_baru.columns:
+                    # Samakan alias nama kolom umum bila memakai master Supabase (misal KDDK <-> KOKED, TARIF <-> TARIP)
+                    if 'koked' in df_lama.columns and 'kddk' in df_baru.columns and 'koked' not in df_baru.columns:
                         df_baru.rename(columns={'kddk': 'koked'}, inplace=True)
+                    elif 'kddk' in df_lama.columns and 'koked' in df_baru.columns and 'kddk' not in df_baru.columns:
+                        df_baru.rename(columns={'koked': 'kddk'}, inplace=True)
 
-                    if 'tarif' in df_lama.columns and 'tarip' in df_baru.columns and 'tarif' not in df_baru.columns:
-                        df_baru.rename(columns={'tarip': 'tarif'}, inplace=True)
-                    elif 'tarip' in df_lama.columns and 'tarif' in df_baru.columns and 'tarip' not in df_baru.columns:
+                    if 'tarip' in df_lama.columns and 'tarif' in df_baru.columns and 'tarip' not in df_baru.columns:
                         df_baru.rename(columns={'tarif': 'tarip'}, inplace=True)
+                    elif 'tarif' in df_lama.columns and 'tarip' in df_baru.columns and 'tarif' not in df_baru.columns:
+                        df_baru.rename(columns={'tarip': 'tarif'}, inplace=True)
 
                     kolom_yang_sama = df_baru.columns.intersection(df_lama.columns)
                     df_baru = df_baru[kolom_yang_sama]
@@ -1042,7 +1044,7 @@ with tab6:
                             df_update_clean = df_baru_exist.apply(lambda col: col.map(bersihkan_sel))
                             df_lama.update(df_update_clean)
 
-                        if not df_baru_new.empty:
+                        if tambah_baris_baru_t6 and not df_baru_new.empty:
                             df_lama = pd.concat([df_lama, df_baru_new])
 
                         df_lama.reset_index(inplace=True)
@@ -1054,9 +1056,9 @@ with tab6:
                         st.dataframe(df_lama.head(50), use_container_width=True)
 
                         st.download_button(
-                            "📥 Download Master Data Updated (.xlsx)", 
+                            "📥 Download Data Updated (.xlsx)", 
                             data=to_excel_bytes(df_lama), 
-                            file_name="Master_Data_Updated.xlsx", 
+                            file_name="Data_Updated_Tab6.xlsx", 
                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", 
                             type="primary"
                         )
@@ -1144,39 +1146,39 @@ with tab7:
 # TAB 8: UPDATE MASTER DATA (VERSI 2)
 # ==========================================
 with tab8:
-    st.header("Tahap 8: Update Master Data Pelanggan (Versi 2)")
-    st.write("Mengisi kolom yang KOSONG di Data Lama dengan data dari Data Baru berdasarkan IDPEL. TIDAK MENAMBAH KOLOM BARU dan data yang sudah terisi TIDAK akan ditimpa.")
+    st.header("Tahap 8: Lengkapi Kolom Kosong dari Master Data (Versi 2)")
+    st.write("Mengisi kolom yang KOSONG di **Data LAMA (file yang ingin dilengkapi)** dengan data dari **Data BARU (Master Data)** berdasarkan IDPEL. TIDAK MENAMBAH KOLOM BARU dan data yang sudah terisi TIDAK akan ditimpa.")
     tampilkan_info_header_master()
     st.markdown("---")
 
     col_l, col_b = st.columns(2)
     with col_l:
-        sumber_lama_t8 = st.radio(
-            "Sumber Data Master LAMA:",
+        file_lama = st.file_uploader("Upload File Excel Data LAMA (Data yang ingin dilengkapi)", type=['xlsx', 'xls'], key="t8_lama")
+    with col_b:
+        sumber_baru_t8 = st.radio(
+            "Sumber Data BARU (Master Data Referensi):",
             ["Upload File Excel", "Ambil dari Supabase (dataplg3)"],
             horizontal=True,
-            key="sumber_lama_t8"
+            key="sumber_baru_t8"
         )
-        if sumber_lama_t8 == "Upload File Excel":
-            file_lama = st.file_uploader("Upload File Excel Data LAMA", type=['xlsx', 'xls'], key="t8_lama")
+        if sumber_baru_t8 == "Upload File Excel":
+            file_baru = st.file_uploader("Upload File Excel Data BARU (Master Data)", type=['xlsx', 'xls'], key="t8_baru")
         else:
-            file_lama = None
-            st.success("✅ Data LAMA akan diambil otomatis dari tabel `dataplg3` Supabase.")
-    with col_b:
-        file_baru = st.file_uploader("Upload File Excel Data BARU", type=['xlsx', 'xls'], key="t8_baru")
+            file_baru = None
+            st.success("✅ Data BARU (Master Data) akan diambil otomatis dari tabel `dataplg3` Supabase.")
 
-    if st.button("Proses Update Master Data (Tab 8)", type="primary"):
-        if (sumber_lama_t8 == "Upload File Excel" and not file_lama) or not file_baru:
-            st.warning("⚠️ Harap lengkapi Data Lama (Upload/Supabase) & upload file Excel Data Baru!")
+    if st.button("Proses Lengkapi Data (Tab 8)", type="primary"):
+        if not file_lama or (sumber_baru_t8 == "Upload File Excel" and not file_baru):
+            st.warning("⚠️ Harap upload file Excel Data LAMA dan pilih/upload Sumber Data BARU (Master)!")
         else:
-            with st.spinner("Sedang memproses update data..."):
+            with st.spinner("Sedang memproses pengisian data dari Master..."):
                 try:
-                    if sumber_lama_t8 == "Ambil dari Supabase (dataplg3)":
-                        df_lama = fetch_master_supabase("*").astype(str)
+                    df_lama = pd.read_excel(file_lama, dtype=str)
+                    
+                    if sumber_baru_t8 == "Ambil dari Supabase (dataplg3)":
+                        df_baru = fetch_master_supabase("*").astype(str)
                     else:
-                        df_lama = pd.read_excel(file_lama, dtype=str)
-                        
-                    df_baru = pd.read_excel(file_baru, dtype=str)
+                        df_baru = pd.read_excel(file_baru, dtype=str)
 
                     def buat_kolom_unik(daftar_kolom):
                         dilihat = {}
@@ -1197,15 +1199,15 @@ with tab8:
                     df_baru.columns = buat_kolom_unik(cols_baru)
                     
                     # Samakan alias nama kolom umum bila memakai master Supabase
-                    if 'kddk' in df_lama.columns and 'koked' in df_baru.columns and 'kddk' not in df_baru.columns:
-                        df_baru.rename(columns={'koked': 'kddk'}, inplace=True)
-                    elif 'koked' in df_lama.columns and 'kddk' in df_baru.columns and 'koked' not in df_baru.columns:
+                    if 'koked' in df_lama.columns and 'kddk' in df_baru.columns and 'koked' not in df_baru.columns:
                         df_baru.rename(columns={'kddk': 'koked'}, inplace=True)
+                    elif 'kddk' in df_lama.columns and 'koked' in df_baru.columns and 'kddk' not in df_baru.columns:
+                        df_baru.rename(columns={'koked': 'kddk'}, inplace=True)
 
-                    if 'tarif' in df_lama.columns and 'tarip' in df_baru.columns and 'tarif' not in df_baru.columns:
-                        df_baru.rename(columns={'tarip': 'tarif'}, inplace=True)
-                    elif 'tarip' in df_lama.columns and 'tarif' in df_baru.columns and 'tarip' not in df_baru.columns:
+                    if 'tarip' in df_lama.columns and 'tarif' in df_baru.columns and 'tarip' not in df_baru.columns:
                         df_baru.rename(columns={'tarif': 'tarip'}, inplace=True)
+                    elif 'tarif' in df_lama.columns and 'tarip' in df_baru.columns and 'tarif' not in df_baru.columns:
+                        df_baru.rename(columns={'tarip': 'tarif'}, inplace=True)
 
                     kolom_format_lama = df_lama.columns.tolist()
 
@@ -1239,7 +1241,7 @@ with tab8:
                             df_export[col] = df_export[col].fillna("").astype(str)
                             df_export[col] = df_export[col].replace({'nan': '', 'None': '', '<NA>': ''})
 
-                        st.success("✅ Master Data berhasil diupdate!")
+                        st.success("✅ Data berhasil dilengkapi dari Master Data!")
                         st.write("Preview Hasil Update:")
                         st.dataframe(df_result.head(15), use_container_width=True)
 
@@ -1263,9 +1265,9 @@ with tab8:
                                 ws.column_dimensions[col_letter].width = max(max_len + 3, 12)
 
                         st.download_button(
-                            label="⬇️ Download Hasil Update Master Data",
+                            label="⬇️ Download Hasil Lengkapi Data (.xlsx)",
                             data=output_t8.getvalue(),
-                            file_name="Master_Data_Updated.xlsx",
+                            file_name="Data_Dilengkapi_Master.xlsx",
                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                             key="t8_download"
                         )
