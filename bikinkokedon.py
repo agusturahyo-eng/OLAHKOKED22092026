@@ -15,7 +15,7 @@ import gc
 import openpyxl
 
 # --- PENGATURAN HALAMAN (WAJIB PALING ATAS DI STREAMLIT) ---
-st.set_page_config(page_title="Aplikasi Olah Data Billman Tulung", layout="wide")
+st.set_page_config(page_title="Aplikasi Olah Data Manbill Tlg", layout="wide")
 
 # 1. Inisialisasi status login
 if "authenticated" not in st.session_state:
@@ -88,8 +88,8 @@ def fetch_master_supabase(columns="*"):
 
 def tampilkan_info_header_master():
     st.info(
-        "📋 **Keterangan Header Kolom Master (`dataplg3` di Server):**\n\n"
-        "`IDPEL` | `KDDK` *(KOKED)* | `NAMA` | `ALAMAT` | `TARIF` *(TARIP)* | "
+        "📋 **Keterangan Header Kolom Master (`dataplg3` di Supabase):**\n\n"
+        "`IDPEL` | `KDDK` *(otomatis dipetakan ke KOKED)* | `NAMA` | `ALAMAT` | `TARIF` *(otomatis dipetakan ke TARIP)* | "
         "`DAYA` | `NOMOR GARDU` | `NOTIANG` | `MEREKKWH` | `NOMORKWH` | `KOORDINAT X` | `KOORDINAT Y` | `NOIDENTITAS` | `NO HP`"
     )
 
@@ -392,7 +392,7 @@ def normalize_pdf_dataframe(df):
 # ==========================================
 # ANTARMUKA STREAMLIT
 # ==========================================
-st.title("⚡ Aplikasi Olah Data Billman Tulung")
+st.title("⚡ Aplikasi Olah Data Manbill Tlg")
 
 tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10 = st.tabs([
     "1️⃣ 1: Bikin Data Untuk Koked", 
@@ -422,7 +422,7 @@ with tab1:
     with col2:
         sumber_master_t1 = st.radio(
             "Sumber Data Master (Ganti ***):",
-            ["Upload File (.xlsx / .dbf)", "Ambil dari Server (dataplg3)"],
+            ["Upload File (.xlsx / .dbf)", "Ambil dari Supabase (dataplg3)"],
             horizontal=True,
             key="sumber_master_t1"
         )
@@ -442,7 +442,7 @@ with tab1:
                     df_baru = proses_list_file(files_baru, 'baru')
                     df_lama = proses_list_file(files_lama, 'lama')
                     
-                    if sumber_master_t1 == "Ambil dari Server (dataplg3)":
+                    if sumber_master_t1 == "Ambil dari Supabase (dataplg3)":
                         df_sup_raw = fetch_master_supabase("IDPEL,KDDK,NAMA,ALAMAT,TARIF,DAYA")
                         df_master = siapkan_df_master_standar(df_sup_raw, 'master')
                     else:
@@ -644,8 +644,8 @@ with tab3:
 # TAB 4: IMPORT & EKSTRAK PDF (TIPE 2 - MESIN TURBO KOORDINAT & TANPA WATERMARK)
 # ==========================================
 with tab4:
-    st.header("Tahap 4: Import & Ekstrak PDF (Tipe 2 - Mode Semua Kolom)")
-    st.markdown("Digunakan untuk format PDF standar. **otomatis membuang watermark).**")
+    st.header("Tahap 4: Import & Ekstrak PDF (Tipe 2 - Mode Turbo Semua Kolom)")
+    st.markdown("Digunakan untuk format PDF standar")
     pdf_files_t2 = st.file_uploader("Upload File PDF Tipe 2", type=['pdf'], accept_multiple_files=True, key="t4_pdf")
 
     if st.button("Proses & Ekstrak Semua Data (Tipe 2)", type="primary"):
@@ -973,7 +973,7 @@ with tab6:
     with col_t6_2:
         sumber_baru_t6 = st.radio(
             "Sumber Data BARU (Master Data Referensi):",
-            ["Upload File Excel", "Ambil dari Server (dataplg3)"],
+            ["Upload File Excel", "Ambil dari Supabase (dataplg3)"],
             horizontal=True,
             key="sumber_baru_t6"
         )
@@ -983,7 +983,7 @@ with tab6:
         else:
             file_baru_m = None
             tambah_baris_baru_t6 = False
-            st.success("✅ Data BARU (Master Data) akan diambil otomatis dari tabel `dataplg3` Server.")
+            st.success("✅ Data BARU (Master Data) akan diambil otomatis dari tabel `dataplg3` Supabase.")
 
     if st.button("Proses Update Data (Tab 6)", type="primary"):
         if not file_lama_m or (sumber_baru_t6 == "Upload File Excel" and not file_baru_m):
@@ -1067,7 +1067,7 @@ with tab6:
                     st.error(f"❌ Terjadi kesalahan: {str(e)}")
                     
 # ==========================================
-# TAB 7: INFO DATA & LOKASI (SERVER DATABASE)
+# TAB 7: INFO DATA & LOKASI (SUPABASE DATABASE)
 # ==========================================
 with tab7:
     st.header("Tahap 7: Info Data & Lokasi Pelanggan")
@@ -1157,7 +1157,7 @@ with tab8:
     with col_b:
         sumber_baru_t8 = st.radio(
             "Sumber Data BARU (Master Data Referensi):",
-            ["Upload File Excel", "Ambil dari Srver (dataplg3)"],
+            ["Upload File Excel", "Ambil dari Supabase (dataplg3)"],
             horizontal=True,
             key="sumber_baru_t8"
         )
@@ -1175,7 +1175,7 @@ with tab8:
                 try:
                     df_lama = pd.read_excel(file_lama, dtype=str)
                     
-                    if sumber_baru_t8 == "Ambil dari Server (dataplg3)":
+                    if sumber_baru_t8 == "Ambil dari Supabase (dataplg3)":
                         df_baru = fetch_master_supabase("*").astype(str)
                     else:
                         df_baru = pd.read_excel(file_baru, dtype=str)
