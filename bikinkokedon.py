@@ -909,7 +909,8 @@ with tab5:
                             alamat = re.search(r'Alamat\s*:\s*(.+)', blok)
                             if alamat: data['Alamat'] = alamat.group(1).strip()
 
-                            meter = re.search(r'Nomor Meter\s*:\s*(\d+)', blok)
+                            # PERBAIKAN DI SINI: MENGIZINKAN ANGKA DAN HURUF UNTUK NOMOR METER
+                            meter = re.search(r'Nomor Meter\s*:\s*([A-Z0-9]+)', blok, re.IGNORECASE)
                             if meter: data['Nomor Meter'] = str(meter.group(1).strip())
 
                             tarif_match = re.search(r'Tarip / Daya\s*:\s*(.+?)\s+Kelompok\s*:\s*([^\n]+)', blok)
