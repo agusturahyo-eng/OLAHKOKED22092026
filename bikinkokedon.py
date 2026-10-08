@@ -1617,7 +1617,25 @@ with tab11:
                 status_text.empty()
                 progress_bar.progress(1.0)
                 
-                df_final = pd.DataFrame(all_extracted_rows, columns=master_headers)
+                # --- PERBAIKAN: JADIKAN NAMA KOLOM UNIK ---
+                unique_headers = []
+                dilihat = {}
+                for idx, col in enumerate(master_headers):
+                    col_bersih = str(col).strip()
+                    # Jika nama kolom kosong (blank)
+                    if not col_bersih:
+                        col_bersih = f"Kolom_Kosong_{idx+1}"
+                        
+                    # Jika nama kolom sudah ada sebelumnya (duplikat)
+                    if col_bersih in dilihat:
+                        dilihat[col_bersih] += 1
+                        unique_headers.append(f"{col_bersih}_{dilihat[col_bersih]}")
+                    else:
+                        dilihat[col_bersih] = 0
+                        unique_headers.append(col_bersih)
+                # ------------------------------------------
+                
+                df_final = pd.DataFrame(all_extracted_rows, columns=unique_headers)
                 df_final = df_final.replace(r'^\s*$', np.nan, regex=True).dropna(how='all')
                 df_final = df_final.fillna("")
                 
