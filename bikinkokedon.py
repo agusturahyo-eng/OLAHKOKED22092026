@@ -394,7 +394,7 @@ def normalize_pdf_dataframe(df):
 # ==========================================
 st.title("⚡ Aplikasi Olah Data Manbill Tlg")
 
-tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11 = st.tabs([
     "1️⃣ 1: Bikin Data Untuk Koked", 
     "2️⃣ 2: Hasil Koked",
     "3️⃣ 3: Eksport Pdf PB",
@@ -404,7 +404,8 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10 = st.tabs([
     "7️⃣ 7: Info & Lokasi",
     "8️⃣ 8: Update Data (Versi 2)",
     "9️⃣ 9: Isi Petugas",
-    "🔟 10: Split Data"
+    "🔟 10: Split Data",
+    "1️⃣1️⃣ 11: Ekstrak Laporan Asli"
 ])
 
 # ==========================================
@@ -1511,3 +1512,125 @@ with tab10:
 
         except Exception as e:
             st.error(f"❌ Terjadi kesalahan saat memproses data: {e}")
+            
+# ==========================================
+# TAB 11: EKSTRAK PDF LAPORAN FORMAT ASLI (AKURAT)
+# ==========================================
+with tab11:
+    st.header("Tahap 11: Ekstrak PDF Laporan Sesuai Asli (Akurat)")
+    st.markdown("Gunakan tab ini **khusus untuk PDF Laporan berbentuk tabel utuh** (seperti Laporan Pembayaran/Perubahan Daya). Proses sedikit lebih lama dari Tab 4, namun pemisahan kolom 100% sama dengan aslinya.")
+    
+    pdf_files_t11 = st.file_uploader("Upload File PDF Laporan (Tab 11)", type=['pdf'], accept_multiple_files=True, key="t11_pdf")
+
+    if st.button("Proses & Ekstrak Laporan (Akurat)", type="primary"):
+        if not pdf_files_t11: 
+            st.error("Silakan unggah setidaknya satu file PDF.")
+        elif not PDF_SUPPORT:
+            st.error("Library `pdfplumber` belum terinstall. Pastikan sudah ada di requirements.txt!")
+        else:
+            all_extracted_rows = []
+            master_headers = None
+            
+            with st.spinner("⏳ Mengekstraksi tabel dengan akurasi tinggi..."):
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+                total_files = len(pdf_files_t11)
+                total_baris_ditemukan = 0
+
+                for f_idx, uploaded_pdf in enumerate(pdf_files_t11):
+                    fname = uploaded_pdf.name
+                    
+                    with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp: 
+                        tmp.write(uploaded_pdf.getvalue())
+                        tmp_path = tmp.name
+                        
+                    try:
+                        with pdfplumber.open(tmp_path) as pdf:
+                            total_hal = len(pdf.pages)
+                            
+                            for i, page in enumerate(pdf.pages):
+                                # Mode text untuk Laporan agar garis putus-putus bisa dimaklumi
+                                table_settings = {
+                                    "vertical_strategy": "lines",
+                                    "horizontal_strategy": "text", 
+                                    "intersection_y_tolerance": 15
+                                }
+                                
+                                tables = page.extract_tables(table_settings)
+                                if not tables:
+                                    tables = page.extract_tables() # fallback default
+                                    
+                                for table in tables:
+                                    if not table or len(table) < 2:
+                                        continue
+                                        
+                                    cleaned_table = []
+                                    for row in table:
+                                        # Gabungkan baris yang terpotong enter
+                                        cleaned_row = [str(cell).replace('\n', ' ').strip() if cell else "" for cell in row]
+                                        if any(cleaned_row):
+                                            cleaned_table.append(cleaned_row)
+                                            
+                                    if not cleaned_table:
+                                        continue
+                                        
+                                    # Cari header
+                                    if master_headers is None:
+                                        for r_idx, row in enumerate(cleaned_table[:15]):
+                                            row_str = " ".join([c.upper() for c in row])
+                                            if "NAMA PEMOHON" in row_str or "NO. AGENDA" in row_str:
+                                                master_headers = row
+                                                cleaned_table = cleaned_table[r_idx + 1:]
+                                                break
+                                        if master_headers is None:
+                                            master_headers = [f"Kolom_{x+1}" for x in range(len(cleaned_table[0]))]
+                                            
+                                    # Tambahkan baris ke list utama
+                                    for row in cleaned_table:
+                                        row_str = " ".join([c.upper() for c in row])
+                                        # Lewati header yang berulang di tiap halaman
+                                        if "NO. AGENDA" in row_str or "NAMA PEMOHON" in row_str or "HALAMAN" in row_str:
+                                            continue
+                                            
+                                        if len(row) < len(master_headers):
+                                            row.extend([""] * (len(master_headers) - len(row)))
+                                        elif len(row) > len(master_headers):
+                                            row = row[:len(master_headers)]
+                                            
+                                        all_extracted_rows.append(row)
+                                        total_baris_ditemukan += 1
+                                        
+                                page.flush_cache()
+                                current_progress = (f_idx + ((i + 1) / max(1, total_hal))) / total_files
+                                progress_bar.progress(min(1.0, current_progress))
+                                status_text.text(f"⚡ File {f_idx+1}/{total_files} ({fname}): Halaman {i+1}/{total_hal} (Terkumpul: {total_baris_ditemukan} baris)...")
+
+                    except Exception as e:
+                        st.error(f"Gagal memproses file {fname}: {str(e)}")
+                    finally:
+                        if os.path.exists(tmp_path): 
+                            os.remove(tmp_path)
+                            
+                gc.collect()
+
+            if all_extracted_rows and master_headers:
+                status_text.empty()
+                progress_bar.progress(1.0)
+                
+                df_final = pd.DataFrame(all_extracted_rows, columns=master_headers)
+                df_final = df_final.replace(r'^\s*$', np.nan, regex=True).dropna(how='all')
+                df_final = df_final.fillna("")
+                
+                st.success(f"🎉 Selesai! Berhasil mengekstraksi {len(df_final)} baris data format tabel asli!")
+                st.dataframe(df_final.head(50), use_container_width=True)
+                
+                st.download_button(
+                    "📥 Download Excel Laporan (.xlsx)", 
+                    data=to_excel_bytes(df_final), 
+                    file_name="Hasil_Ekstrak_Laporan_Akurat.xlsx", 
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", 
+                    type="primary",
+                    key="dl_tab11"
+                )
+            else:
+                st.warning("⚠️ Tidak ada data tabel yang terdeteksi dengan format tersebut.")
