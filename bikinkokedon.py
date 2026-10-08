@@ -701,7 +701,7 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12 = st.t
 # TAB 1: PERSIAPAN DATA
 # ==========================================
 with tab1:
-    st.header("Tahap 1: Memecah Data Untuk Petugas Lapangan")
+    st.header("Tahap 1: Memecah Data Per Petugas")
     st.markdown("Digunakan untuk membuat data perpetugas buat koked, data pelanggan baru, dan data master")
     tampilkan_info_header_master()
     col1, col2 = st.columns(2)
@@ -816,7 +816,7 @@ with tab1:
 # TAB 2: REKAP & PERUBAHAN KOKED
 # ==========================================
 with tab2:
-    st.header("Tahap 2: Gabung File Petugas & Mutasi KOKED")
+    st.header("Tahap 2: Gabung File Petugas & Perubahan KOKED")
     st.markdown("Digunakan untuk membuat hasil koked untuk di upload di PLN")
     tampilkan_info_header_master()
     col3, col4 = st.columns(2)
@@ -876,7 +876,7 @@ with tab2:
 # ==========================================
 with tab3:
     st.header("Tahap 3: Import & Ekstrak PDF (Tipe 1)")
-    st.markdown("Digunakan untuk file yang terpotong barisnya. **Data di-filter ke 8 Kolom Standar.**")
+    st.markdown("Digunakan untuk file yang terpotong barisnya.")
     pdf_files_t1 = st.file_uploader("Upload File PDF Tipe 1", type=['pdf'], accept_multiple_files=True, key="t3_pdf")
 
     if st.button("Proses & Ekstrak PDF (Tipe 1)", type="primary"):
@@ -910,11 +910,11 @@ with tab3:
                 st.warning("⚠️ Tidak ada data tabel yang terdeteksi.")
 
 # ==========================================
-# TAB 4: IMPORT & EKSTRAK PDF (TIPE 2 - TURBO & RAPIH SESUAI ASLI)
+# TAB 4: IMPORT & EKSTRAK PDF TIPE 2  SESUAI ASLI
 # ==========================================
 with tab4:
-    st.header("Tahap 4: Ekstrak PDF Tipe 2 (Turbo & Format Utuh)")
-    st.markdown("Menggunakan mesin **Turbo (PyMuPDF)** yang sangat cepat, namun telah dioptimalkan agar membaca **tabel secara utuh sesuai aslinya (16+ Kolom)** tanpa memotong atau menggabungkan data.")
+    st.header("Tahap 4: Ekstrak PDF Tipe 2 (Format Utuh)")
+    st.markdown("Untuk convert PDF secara utuh sesuai aslinya")
     pdf_files_t4 = st.file_uploader("Upload File PDF Laporan", type=['pdf'], accept_multiple_files=True, key="t4_pdf")
 
     if st.button("🚀 Proses & Ekstrak Data (Tab 4)", type="primary"):
@@ -1015,7 +1015,7 @@ with tab4:
 # ==========================================
 with tab5:
     st.header("Tahap 5: Rekap Data ICONPRN")
-    st.markdown("Ekstraksi file teks `.iconprn` menjadi file Excel tagihan gabungan secara otomatis.")
+    st.markdown("Ekstraksi file teks `.iconprn` menjadi file Excel.")
     iconprn_files = st.file_uploader("Upload File .iconprn", accept_multiple_files=True, key="t5_iconprn")
     
     if st.button("Proses File ICONPRN", type="primary"):
@@ -1548,79 +1548,151 @@ with tab10:
             st.error(f"❌ Terjadi kesalahan saat memproses data: {e}")
 
 # ==========================================
-# TAB 11: EKSTRAK PDF LAPORAN FORMAT ASLI (AKURAT)
+# TAB 11: EKSTRAK PDF LAPORAN FORMAT ASLI
 # ==========================================
 with tab11:
-    st.header("Tahap 11: Ekstrak PDF Laporan Sesuai Asli (Akurat)")
-    st.markdown("Menggunakan mesin Hybrid (seperti Tab 3) yang sudah terbukti berhasil membaca garis laporan, tetapi fitur ini **mempertahankan seluruh kolom asli (16 kolom)** tanpa memfilter datanya.")
+    st.header("Tahap 11: Ekstrak PDF Laporan Sesuai Asli")
+    st.markdown("Untuk convert PDF ke Excel utuh sesuai isinya")
+    
     pdf_files_t11 = st.file_uploader("Upload File PDF Laporan (Tab 11)", type=['pdf'], accept_multiple_files=True, key="t11_pdf")
 
     if st.button("Proses & Ekstrak Laporan (Akurat)", type="primary"):
-        if not pdf_files_t11: st.error("Silakan unggah setidaknya satu file PDF.")
-        elif not PDF_SUPPORT: st.error("Library `pdfplumber` belum terinstall. Pastikan sudah ada di requirements.txt!")
+        if not pdf_files_t11: 
+            st.error("Silakan unggah setidaknya satu file PDF.")
+        elif not PDF_SUPPORT:
+            st.error("Library `pdfplumber` belum terinstall!")
         else:
-            all_extracted_dfs = []
-            with st.spinner("⏳ Mengekstraksi tabel dengan mesin Hybrid..."):
+            all_extracted_rows = []
+            
+            with st.spinner("⏳ Mengekstraksi tabel dan menyatukan baris teks..."):
                 progress_bar = st.progress(0)
                 status_text = st.empty()
                 total_files = len(pdf_files_t11)
+                total_baris = 0
+                
                 for f_idx, uploaded_pdf in enumerate(pdf_files_t11):
                     fname = uploaded_pdf.name
                     with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp: 
                         tmp.write(uploaded_pdf.getvalue())
                         tmp_path = tmp.name
+                        
                     try:
                         with pdfplumber.open(tmp_path) as pdf:
                             total_hal = len(pdf.pages)
                             for i, page in enumerate(pdf.pages):
-                                tables = get_pdf_tables_tipe1(page)
+                                clean_p = bersihkan_halaman_pdf(page)
+                                
+                                # STRATEGI BARU: Pakai teks untuk potong baris, karena tak ada garis horizontal
+                                table_settings = {
+                                    "vertical_strategy": "lines",
+                                    "horizontal_strategy": "text",
+                                    "snap_y_tolerance": 3,
+                                    "intersection_x_tolerance": 15
+                                }
+                                tables = clean_p.extract_tables(table_settings)
+                                if not tables:
+                                    tables = clean_p.extract_tables()
+                                    
                                 for table in tables:
-                                    df_hybrid = process_hybrid_table(table)
-                                    if df_hybrid is not None and not df_hybrid.empty: 
-                                        all_extracted_dfs.append(df_hybrid)
+                                    if not table or len(table) < 2: continue
+                                    
+                                    merged_data = []
+                                    for row in table:
+                                        # Bersihkan spasi dan enter
+                                        c_row = [str(c).replace('\n', ' ').strip() if c else "" for c in row]
+                                        if not any(c_row): continue
+                                        
+                                        row_str = " ".join(c_row).upper()
+                                        
+                                        # Buang header yang berulang di setiap halaman
+                                        if "NO. AGENDA" in row_str or "NAMA PEMOHON" in row_str or "TARIF/DAYA" in row_str or ("LAMA" in row_str and "BARU" in row_str) or "LAPORAN PEMBAYARAN" in row_str:
+                                            continue
+                                        
+                                        # Cek apakah ini pelanggan baru atau sekadar baris sambungan (lanjutan alamat)
+                                        no_urut = c_row[0] if len(c_row) > 0 else ""
+                                        no_agenda = c_row[1] if len(c_row) > 1 else ""
+                                        
+                                        is_new_row = False
+                                        # Pelanggan baru pasti punya No. Urut (angka) atau No. Agenda (angka panjang)
+                                        if re.match(r'^\d+$', no_urut) or re.search(r'\d{5,}', no_agenda):
+                                            is_new_row = True
+                                            
+                                        if is_new_row or not merged_data:
+                                            # Masukkan sebagai baris baru
+                                            merged_data.append(c_row)
+                                        else:
+                                            # Jika bukan, GABUNGKAN teksnya ke baris pelanggan di atasnya
+                                            for col_idx in range(len(c_row)):
+                                                if c_row[col_idx]:
+                                                    if col_idx < len(merged_data[-1]):
+                                                        if merged_data[-1][col_idx]:
+                                                            merged_data[-1][col_idx] += " " + c_row[col_idx]
+                                                        else:
+                                                            merged_data[-1][col_idx] = c_row[col_idx]
+                                                    else:
+                                                        merged_data[-1].append(c_row[col_idx])
+                                                        
+                                    # Simpan hasil merge halaman ini yang isinya tidak kosong
+                                    for r in merged_data:
+                                        if any(r):
+                                            all_extracted_rows.append(r)
+                                            total_baris += 1
+                                            
                                 page.flush_cache()
                                 current_progress = (f_idx + ((i + 1) / max(1, total_hal))) / total_files
                                 progress_bar.progress(min(1.0, current_progress))
-                                status_text.text(f"⚡ File {f_idx+1}/{total_files} ({fname}): Halaman {i+1}/{total_hal} diproses...")
+                                status_text.text(f"⚡ File {f_idx+1}/{total_files} ({fname}): Halaman {i+1}/{total_hal} (Terkumpul: {total_baris} baris)...")
+                                
                     except Exception as e:
                         st.error(f"Gagal memproses file {fname}: {str(e)}")
                     finally:
                         if os.path.exists(tmp_path): os.remove(tmp_path)
                 gc.collect()
 
-            if all_extracted_dfs:
+            if all_extracted_rows:
                 status_text.empty()
                 progress_bar.progress(1.0)
-                df_final = pd.concat(all_extracted_dfs, ignore_index=True)
                 
-                unique_headers = []
-                dilihat = {}
-                for idx, col in enumerate(df_final.columns):
-                    col_bersih = str(col).replace('\n', ' ').strip()
-                    if not col_bersih: col_bersih = f"Kolom_Kosong_{idx+1}"
-                    if col_bersih in dilihat:
-                        dilihat[col_bersih] += 1
-                        unique_headers.append(f"{col_bersih}_{dilihat[col_bersih]}")
-                    else:
-                        dilihat[col_bersih] = 0
-                        unique_headers.append(col_bersih)
+                # Definisikan 15 Header Standar Laporan PLN agar kolomnya selalu rapih
+                master_headers = [
+                    "No Urut", "No. Agenda", "Tgl Agenda", "Nama Pemohon", "Alamat Pemohon", 
+                    "Tarif/Daya Lama", "Tarif/Daya Baru", "Delta Daya", "No. SIP", "Tgl SIP", 
+                    "Tgl Bayar", "NOPEL / ID Pelanggan", "IDPEL Tetangga", "Telp / HP", "Keterangan Lunas Di"
+                ]
                 
-                df_final.columns = unique_headers
-                df_final = df_final.replace(r'^\s*$', np.nan, regex=True).dropna(how='all')
-                df_final = df_final.fillna("")
+                # Menyesuaikan jika ada kolom lebih/kurang
+                max_cols = max(len(r) for r in all_extracted_rows)
+                if max_cols > len(master_headers):
+                    for ext in range(len(master_headers), max_cols):
+                        master_headers.append(f"Kolom_Ekstra_{ext+1}")
                 
-                st.success(f"🎉 Selesai! Berhasil mengekstraksi {len(df_final)} baris data format tabel asli!")
+                for r in all_extracted_rows:
+                    if len(r) < len(master_headers):
+                        r.extend([""] * (len(master_headers) - len(r)))
+                
+                df_final = pd.DataFrame(all_extracted_rows, columns=master_headers[:max_cols])
+                df_final = df_final.replace(r'^\s*$', np.nan, regex=True).dropna(how='all').fillna("")
+                
+                st.success(f"🎉 Selesai! Berhasil mengekstraksi {len(df_final)} pelanggan secara utuh dan akurat!")
                 st.dataframe(df_final.head(50), use_container_width=True)
-                st.download_button("📥 Download Excel Laporan (.xlsx)", data=to_excel_bytes(df_final), file_name="Hasil_Ekstrak_Laporan_Akurat.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", type="primary", key="dl_tab11")
+                
+                st.download_button(
+                    "📥 Download Excel Laporan (.xlsx)", 
+                    data=to_excel_bytes(df_final), 
+                    file_name="Hasil_Ekstrak_Laporan_Akurat.xlsx", 
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", 
+                    type="primary",
+                    key="dl_tab11"
+                )
             else:
-                st.warning("⚠️ Tidak ada data tabel yang terdeteksi dengan format tersebut.")
+                st.warning("⚠️ Tidak ada data tabel yang terdeteksi.")
 
 # ==========================================
 # TAB 12: CETAK TUL VI-01
 # ==========================================
 with tab12:
-    st.header("Tahap 12: Cetak TUL VI-01 (Presisi & Rata Kanan)")
-    st.markdown("Digunakan untuk mencetak Pemberitahuan Pelaksanaan Pemutusan Sementara Sambungan Tenaga Listrik ke format `.iconprn` yang siap dikirim ke printer Dot Matrix.")
+    st.header("Tahap 12: Cetak TUL VI-01")
+    st.markdown("Digunakan untuk mencetak TUL VI-01.")
     
     col_t12_1, col_t12_2 = st.columns([1, 2])
     with col_t12_1:
