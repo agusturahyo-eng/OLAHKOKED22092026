@@ -54,12 +54,6 @@ SUPABASE_URL = "https://wnzedfyiublmzmjkzsrq.supabase.co"
 SUPABASE_KEY = "sb_publishable_g1WlECVLkTdNBMwL2QxWlA_gOu6l4VR"
 SUPABASE_TABLE = "dataplg3"
 
-HEADER_MASTER_SUPABASE = [
-    "IDPEL", "KDDK", "NAMA", "ALAMAT", "TARIF", "DAYA", 
-    "NOMOR GARDU", "NOTIANG", "MEREKKWH", "NOMORKWH", 
-    "KOORDINAT X", "KOORDINAT Y", "NOIDENTITAS", "NO HP"
-]
-
 @st.cache_resource
 def init_koneksi():
     from supabase import create_client
@@ -67,7 +61,7 @@ def init_koneksi():
 
 @st.cache_data(ttl=1800, max_entries=2, show_spinner=False)
 def fetch_master_supabase(columns="*"):
-    """Mengambil seluruh data master dari Supabase (tabel dataplg3) secara bertahap (pagination)."""
+    """Mengambil seluruh data master dari Supabase secara bertahap."""
     client = init_koneksi()
     all_rows = []
     batch_size = 1000
@@ -83,8 +77,7 @@ def fetch_master_supabase(columns="*"):
             break
         start += batch_size
         
-    df = pd.DataFrame(all_rows)
-    return df
+    return pd.DataFrame(all_rows)
 
 def tampilkan_info_header_master():
     st.info(
@@ -92,21 +85,6 @@ def tampilkan_info_header_master():
         "`IDPEL` | `KDDK` *(otomatis dipetakan ke KOKED)* | `NAMA` | `ALAMAT` | `TARIF` *(otomatis dipetakan ke TARIP)* | "
         "`DAYA` | `NOMOR GARDU` | `NOTIANG` | `MEREKKWH` | `NOMORKWH` | `KOORDINAT X` | `KOORDINAT Y` | `NOIDENTITAS` | `NO HP`"
     )
-
-# --- FUNGSI FILTER WATERMARK PDFPLUMBER (UNTUK TAB 3) ---
-def filter_watermark_obj(obj):
-    if obj.get("object_type") == "char":
-        if not obj.get("upright", True):
-            return False
-        if obj.get("size", 0) > 14:
-            return False
-    return True
-
-def bersihkan_halaman_pdf(page):
-    try:
-        return page.filter(filter_watermark_obj)
-    except Exception:
-        return page
 
 # --- FUNGSI MEMBERSIHKAN DAYA & IDPEL ---
 def clean_daya(val):
@@ -127,29 +105,20 @@ def clean_idpel(val):
     if s.endswith('.0'): s = s[:-2]
     return s
 
-# --- FUNGSI UN-MASKING (NAMA/ALAMAT BINTANG) ---
 def fix_masked_info(df_baru, df_master, df_sup_pb):
     if df_baru.empty: return df_baru
     df_baru = df_baru.reset_index(drop=True)
-
-    nama_map = {}
-    alamat_map = {}
+    nama_map, alamat_map = {}, {}
 
     if not df_sup_pb.empty:
         sup_clean = df_sup_pb.drop_duplicates(subset=['IDPEL'], keep='first').copy()
-        sup_clean = sup_clean[
-            sup_clean['NAMA'].astype(str).str.strip().ne('') &
-            ~sup_clean['NAMA'].astype(str).str.contains(r'\*', na=False)
-        ]
+        sup_clean = sup_clean[sup_clean['NAMA'].astype(str).str.strip().ne('') & ~sup_clean['NAMA'].astype(str).str.contains(r'\*', na=False)]
         nama_map.update(sup_clean.set_index('IDPEL')['NAMA'].to_dict())
         alamat_map.update(sup_clean.set_index('IDPEL')['ALAMAT'].to_dict())
 
     if not df_master.empty:
         master_clean = df_master.drop_duplicates(subset=['IDPEL'], keep='first').copy()
-        master_clean = master_clean[
-            master_clean['NAMA'].astype(str).str.strip().ne('') &
-            ~master_clean['NAMA'].astype(str).str.contains(r'\*', na=False)
-        ]
+        master_clean = master_clean[master_clean['NAMA'].astype(str).str.strip().ne('') & ~master_clean['NAMA'].astype(str).str.contains(r'\*', na=False)]
         nama_map.update(master_clean.set_index('IDPEL')['NAMA'].to_dict())
         alamat_map.update(master_clean.set_index('IDPEL')['ALAMAT'].to_dict())
 
@@ -161,9 +130,7 @@ def fix_masked_info(df_baru, df_master, df_sup_pb):
 
     df_baru.loc[is_masked_nama, 'NAMA'] = df_baru.loc[is_masked_nama, 'IDPEL'].map(nama_map).fillna(df_baru.loc[is_masked_nama, 'NAMA'])
     df_baru.loc[is_masked_alamat, 'ALAMAT'] = df_baru.loc[is_masked_alamat, 'IDPEL'].map(alamat_map).fillna(df_baru.loc[is_masked_alamat, 'ALAMAT'])
-
     return df_baru
-
 
 # --- FUNGSI PEMBACA FILE UMUM TAHAP 1 & 2 ---
 def baca_ekstrak_tabel(uploaded_file):
@@ -176,7 +143,6 @@ def baca_ekstrak_tabel(uploaded_file):
         with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
             tmp.write(uploaded_file.getvalue())
             tmp_path = tmp.name
-
         try:
             if ext == '.dbf':
                 df = pd.DataFrame(iter(DBF(tmp_path, char_decode_errors='ignore')))
@@ -190,19 +156,16 @@ def baca_ekstrak_tabel(uploaded_file):
     df.columns = df.columns.astype(str).str.strip().str.upper()
     df = df.rename(columns={'KDDK': 'KOKED', 'TARIF': 'TARIP', 'NAMAPNJ': 'ALAMAT'})
     df = df.loc[:, ~df.columns.duplicated(keep='first')]
-    
     return df, fname
 
 def siapkan_df_master_standar(df, tipe_data='master'):
-    if df.empty:
-        return pd.DataFrame()
+    if df.empty: return pd.DataFrame()
     df = df.copy()
     df.columns = df.columns.astype(str).str.strip().str.upper()
     df = df.rename(columns={'KDDK': 'KOKED', 'TARIF': 'TARIP', 'NAMAPNJ': 'ALAMAT'})
     df = df.loc[:, ~df.columns.duplicated(keep='first')]
 
-    if 'IDPEL' not in df.columns:
-        raise ValueError("Kolom 'IDPEL' tidak ditemukan di Data Master Supabase.")
+    if 'IDPEL' not in df.columns: raise ValueError("Kolom 'IDPEL' tidak ditemukan di Data Master Supabase.")
 
     if tipe_data == 'master':
         for col in ['NAMA', 'ALAMAT', 'KOKED', 'TARIP']:
@@ -235,7 +198,7 @@ def proses_list_file(files, tipe_data):
             list_df.append(df[['IDPEL', 'KOKED', 'TARIP', 'DAYA', 'NAMA', 'ALAMAT']])
             
         elif tipe_data == 'lama':
-            if 'IDPEL' not in df.columns: raise ValueError(f"Kolom 'IDPEL' hilang di Data Lama/Pembanding: {fname}")
+            if 'IDPEL' not in df.columns: raise ValueError(f"Kolom 'IDPEL' hilang di Data Lama: {fname}")
             if 'KOKED' not in df.columns: df['KOKED'] = ''
             df['IDPEL'] = df['IDPEL'].apply(clean_idpel)
             df['KOKED'] = df['KOKED'].astype(str).str.strip()
@@ -278,13 +241,20 @@ def to_excel_bytes(df):
     return output.getvalue()
 
 
-# --- LOGIKA EKSTRAKSI TABEL PDF TIPE 1 (HYBRID) ---
+# --- FUNGSI TAB 3 & 11 (PDFPLUMBER HYBRID) ---
+def filter_watermark_obj(obj):
+    if obj.get("object_type") == "char":
+        if not obj.get("upright", True): return False
+        if obj.get("size", 0) > 14: return False
+    return True
+
+def bersihkan_halaman_pdf(page):
+    try: return page.filter(filter_watermark_obj)
+    except: return page
+
 def get_pdf_tables_tipe1(page):
     clean_p = bersihkan_halaman_pdf(page)
-    table_settings = {
-        "vertical_strategy": "lines",
-        "horizontal_strategy": "text",
-    }
+    table_settings = {"vertical_strategy": "lines", "horizontal_strategy": "text"}
     tables = clean_p.extract_tables(table_settings)
     if not tables or len(tables) == 0 or all(len(t) < 2 for t in tables):
         tables = clean_p.extract_tables()
@@ -292,7 +262,6 @@ def get_pdf_tables_tipe1(page):
 
 def process_hybrid_table(table):
     if not table or len(table) < 2: return None
-
     merged_rows = []
     for row in table:
         cleaned_row = [str(cell).replace('\n', ' ').strip() if cell and str(cell) != 'None' else "" for cell in row]
@@ -307,7 +276,6 @@ def process_hybrid_table(table):
                         merged_rows[-1][i] = (merged_rows[-1][i] + " " + cleaned_row[i]).strip()
                     else:
                         merged_rows[-1].append(cleaned_row[i])
-
     if not merged_rows: return None
 
     header_index = 0
@@ -318,14 +286,10 @@ def process_hybrid_table(table):
             header_index = idx
             break
 
-    headers = []
-    for i, h in enumerate(merged_rows[header_index]):
-        val = str(h).strip() if str(h).strip() != "" else f"KOLOM_{i+1}"
-        headers.append(val)
-        
-    df = pd.DataFrame(merged_rows[header_index+1:], columns=headers)
-    return df
+    headers = [str(h).strip() if str(h).strip() != "" else f"KOLOM_{i+1}" for i, h in enumerate(merged_rows[header_index])]
+    return pd.DataFrame(merged_rows[header_index+1:], columns=headers)
 
+# --- FUNGSI NORMALISASI TAB 3 ---
 def find_target_column(col_name):
     col_clean = re.sub(r'[^A-Z0-9]', '', str(col_name).upper())
     if 'NOPEL' in col_clean or 'IDPEL' in col_clean or 'IDPELANGGAN' in col_clean or col_clean == 'ID' or col_clean == 'IDPEL': return 'IDPEL'
@@ -353,8 +317,7 @@ def separate_idpel_and_nama(df):
     return df
 
 def normalize_pdf_dataframe(df):
-    if df is None or df.empty:
-        return pd.DataFrame(columns=['IDPEL', 'NAMA', 'ALAMAT', 'TARIF', 'DAYA', 'GARDU', 'TIANG', 'KOKED'])
+    if df is None or df.empty: return pd.DataFrame(columns=['IDPEL', 'NAMA', 'ALAMAT', 'TARIF', 'DAYA', 'GARDU', 'TIANG', 'KOKED'])
     new_cols = [find_target_column(c) for c in df.columns]
     df.columns = new_cols
     df = df.loc[:, ~df.columns.duplicated(keep='first')]
@@ -385,6 +348,7 @@ def normalize_pdf_dataframe(df):
     for col in ['NAMA', 'ALAMAT']: df[col] = df[col].astype(str).replace('nan', '').replace('None', '').str.strip()
     df = df[df['IDPEL'].astype(str).str.strip() != ''].copy()
     return df[target_cols].reset_index(drop=True)
+
 
 # ================= FUNGSI UNTUK TAB 12 (CETAK TUL) =================
 def tentukan_petugas_tul(idpel, tarif_daya, kddk):
@@ -452,6 +416,7 @@ def baca_data_dari_iconprn_tul(teks_mentah):
         alamat = re.search(r'Alamat\s*:\s*(.+)', blok)
         if alamat: data['Alamat'] = alamat.group(1).strip()
 
+        # AMAN: Nomor meter mendukung alphanumeric
         meter = re.search(r'Nomor Meter\s*:\s*([A-Z0-9]+)', blok, re.IGNORECASE)
         if meter: data['Nomor Meter'] = str(meter.group(1).strip())
 
@@ -712,7 +677,6 @@ def buat_blangko_kosong(init_code, jml_lembar=50, page_lines=44):
         lines.append("")
     return ("\r\n".join(lines[:page_lines]) + "\r\n") * jml_lembar
 
-
 # ==========================================
 # ANTARMUKA STREAMLIT
 # ==========================================
@@ -721,8 +685,8 @@ st.title("⚡ Aplikasi Olah Data & Cetak TUL")
 tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12 = st.tabs([
     "1️⃣ 1: Bikin Data Untuk Koked", 
     "2️⃣ 2: Hasil Koked",
-    "3️⃣ 3: Eksport PDFPB",
-    "4️⃣ 4: Eksport PDF CEPAT",
+    "3️⃣ 3: Eksport Pdf PB",
+    "4️⃣ 4: Eksport PDF",
     "5️⃣ 5: eksport ICONPRN",
     "6️⃣ 6: Olah Data",
     "7️⃣ 7: Info & Lokasi",
@@ -737,10 +701,9 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12 = st.t
 # TAB 1: PERSIAPAN DATA
 # ==========================================
 with tab1:
-    st.header("Tahap 1: Memecah Data Untuk Cater")
-    st.markdown("Untuk membuat data perpetugas buat koked, data pelanggan baru, dan data master")
+    st.header("Tahap 1: Memecah Data Untuk Petugas Lapangan")
+    st.markdown("Digunakan untuk membuat data perpetugas buat koked, data pelanggan baru, dan data master")
     tampilkan_info_header_master()
-    
     col1, col2 = st.columns(2)
     with col1:
         files_baru = st.file_uploader("[Tahap 1] Data Server Bulan INI", accept_multiple_files=True, key="t1_baru")
@@ -757,7 +720,6 @@ with tab1:
         else:
             files_master = None
             st.success("✅ Data Master akan diambil otomatis dari Supabase (`IDPEL, KDDK, NAMA, ALAMAT, TARIF, DAYA`).")
-            
         files_suppb = st.file_uploader("[Tahap 1] Data PB Baru", accept_multiple_files=True, key="t1_suppb")
 
     if st.button("Proses Tahap 1", type="primary"):
@@ -767,20 +729,17 @@ with tab1:
                 try:
                     df_baru = proses_list_file(files_baru, 'baru')
                     df_lama = proses_list_file(files_lama, 'lama')
-                    
                     if sumber_master_t1 == "Ambil dari Supabase (dataplg3)":
                         df_sup_raw = fetch_master_supabase("IDPEL,KDDK,NAMA,ALAMAT,TARIF,DAYA")
                         df_master = siapkan_df_master_standar(df_sup_raw, 'master')
                     else:
                         df_master = proses_list_file(files_master, 'master') if files_master else pd.DataFrame()
-                        
                     df_sup_pb = proses_list_file(files_suppb, 'sup_pb') if files_suppb else pd.DataFrame()
 
                     if df_baru.empty: raise ValueError("Data Bulan Ini kosong atau gagal dibaca.")
                     if df_lama.empty: raise ValueError("Data Bulan Lalu kosong atau gagal dibaca.")
 
                     df_baru = fix_masked_info(df_baru, df_master, df_sup_pb)
-
                     idpel_block = '524050450911'
                     df_baru = df_baru[(df_baru['DAYA'] <= 33000) & (df_baru['IDPEL'] != idpel_block)].copy().reset_index(drop=True)
 
@@ -795,10 +754,8 @@ with tab1:
                             df.sort_values(by=['KOKED', 'NO_URUT'], inplace=True)
 
                     kolom_export = ['IDPEL', 'KOKED', 'NAMA', 'ALAMAT', 'TARIP', 'DAYA']
-
                     zip_buffer = io.BytesIO()
                     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
-                        
                         if not df_pb.empty:
                             df_pb_clean = df_pb.drop_duplicates(subset=['IDPEL'], keep='first')
                             pb_bytes = to_excel_bytes(df_pb_clean[kolom_export])
@@ -839,18 +796,14 @@ with tab1:
                             'C29': ['JCJ', 'KCJ'], 'C30': 'TAJ', 'C31': 'MBK', 'C32': 'KBL',
                             'C33': 'TAK', 'C34': 'KAL', 'C35': 'JCL', 'C36': 'MBD'
                         }
-
                         def export_excel(df_source, prefix=""):
                             if df_source.empty: return
                             for nama_file, kriteria in mapping.items():
-                                if isinstance(kriteria, list): 
-                                    temp_df = df_source[df_source['KOKED'].astype(str).str[3:6].isin(kriteria)]
-                                else: 
-                                    temp_df = df_source[df_source['KOKED'].astype(str).str[3:6] == kriteria]
+                                if isinstance(kriteria, list): temp_df = df_source[df_source['KOKED'].astype(str).str[3:6].isin(kriteria)]
+                                else: temp_df = df_source[df_source['KOKED'].astype(str).str[3:6] == kriteria]
                                 if not temp_df.empty:
                                     temp_df = temp_df.drop_duplicates(subset=['IDPEL'], keep='first')
                                     zip_file.writestr(f"{prefix}{nama_file}.xlsx", to_excel_bytes(temp_df[kolom_export]))
-
                         export_excel(df_pb, "PB_")
                         export_excel(df_tetap, "")
                         
@@ -864,12 +817,10 @@ with tab1:
 # ==========================================
 with tab2:
     st.header("Tahap 2: Gabung File Petugas & Mutasi KOKED")
-    st.markdown("Untuk membuat hasil koked untuk di upload di PLN")
+    st.markdown("Digunakan untuk membuat hasil koked untuk di upload di PLN")
     tampilkan_info_header_master()
-    
     col3, col4 = st.columns(2)
-    with col3: 
-        files_petugas = st.file_uploader("[Tahap 2] Data Hasil Kerja Petugas", accept_multiple_files=True, key="t2_petugas")
+    with col3: files_petugas = st.file_uploader("[Tahap 2] Data Hasil Kerja Petugas", accept_multiple_files=True, key="t2_petugas")
     with col4:
         sumber_master_t2 = st.radio(
             "Sumber Data Master / Pembanding:",
@@ -890,7 +841,6 @@ with tab2:
             with st.spinner("Membandingkan KOKED..."):
                 try:
                     df_petugas = proses_list_file(files_petugas, 'petugas')
-                    
                     if sumber_master_t2 == "Ambil dari Supabase (dataplg3)":
                         df_sup_t2 = fetch_master_supabase("IDPEL,KDDK")
                         df_lama_pem = siapkan_df_master_standar(df_sup_t2, 'lama')
@@ -903,24 +853,17 @@ with tab2:
                     df_petugas.rename(columns={'KDDK': 'KOKED', 'TARIP': 'TARIF'}, inplace=True)
                     df_lama_pem.rename(columns={'KDDK': 'KOKED', 'TARIP': 'TARIF'}, inplace=True)
 
-                    df_compare = df_petugas[['IDPEL', 'KOKED']].merge(
-                        df_lama_pem[['IDPEL', 'KOKED']], 
-                        on='IDPEL', 
-                        suffixes=('_BARU', '_LAMA')
-                    )
+                    df_compare = df_petugas[['IDPEL', 'KOKED']].merge(df_lama_pem[['IDPEL', 'KOKED']], on='IDPEL', suffixes=('_BARU', '_LAMA'))
                     df_changed = df_compare[(df_compare['KOKED_BARU'] != df_compare['KOKED_LAMA']) & (df_compare['KOKED_LAMA'] != '')]
-                    
                     df_petugas['NO_URUT'] = pd.to_numeric(df_petugas['KOKED'].str[7:10], errors='coerce').fillna(0).astype(int)
                     df_petugas.sort_values(by=['KOKED', 'NO_URUT'], inplace=True)
 
                     for col in ['IDPEL', 'KOKED', 'NAMA', 'ALAMAT', 'TARIF', 'DAYA']:
-                        if col not in df_petugas.columns:
-                            df_petugas[col] = ''
+                        if col not in df_petugas.columns: df_petugas[col] = ''
 
                     zip_buffer2 = io.BytesIO()
                     with zipfile.ZipFile(zip_buffer2, "w", zipfile.ZIP_DEFLATED) as zip_file2:
-                        if not df_changed.empty:
-                            zip_file2.writestr("PERUBAHAN_KOKED.txt", "\n".join((df_changed['IDPEL'].astype(str) + "|" + df_changed['KOKED_BARU'].astype(str)).tolist()))
+                        if not df_changed.empty: zip_file2.writestr("PERUBAHAN_KOKED.txt", "\n".join((df_changed['IDPEL'].astype(str) + "|" + df_changed['KOKED_BARU'].astype(str)).tolist()))
                         zip_file2.writestr("DATA_GABUNGAN_FINAL.xlsx", to_excel_bytes(df_petugas[['IDPEL', 'KOKED', 'NAMA', 'ALAMAT', 'TARIF', 'DAYA']]))
 
                     st.success(f"✅ Selesai! {len(df_changed)} data mutasi KOKED.")
@@ -929,11 +872,11 @@ with tab2:
                     st.error(f"❌ Error Tahap 2: {str(e)}")
 
 # ==========================================
-# TAB 3: IMPORT & EKSTRAK PDF PB
+# TAB 3: IMPORT & EKSTRAK PDF (TIPE 1)
 # ==========================================
 with tab3:
-    st.header("Tahap 3: Import & Ekstrak PDF PB")
-    st.markdown("Untuk file yang terpotong barisnya. **Data di-filter ke 8 Kolom Standar.**")
+    st.header("Tahap 3: Import & Ekstrak PDF (Tipe 1)")
+    st.markdown("Digunakan untuk file yang terpotong barisnya. **Data di-filter ke 8 Kolom Standar.**")
     pdf_files_t1 = st.file_uploader("Upload File PDF Tipe 1", type=['pdf'], accept_multiple_files=True, key="t3_pdf")
 
     if st.button("Proses & Ekstrak PDF (Tipe 1)", type="primary"):
@@ -967,23 +910,21 @@ with tab3:
                 st.warning("⚠️ Tidak ada data tabel yang terdeteksi.")
 
 # ==========================================
-# TAB 4: IMPORT & EKSTRAK PDF (CEPAT)
+# TAB 4: IMPORT & EKSTRAK PDF (TIPE 2 - TURBO & RAPIH SESUAI ASLI)
 # ==========================================
 with tab4:
-    st.header("Tahap 4: Ekstrak PDF 2 (Cepat)")
-    st.markdown("Untuk Convert Pdf secara Cepat.")
+    st.header("Tahap 4: Ekstrak PDF Tipe 2 (Turbo & Format Utuh)")
+    st.markdown("Menggunakan mesin **Turbo (PyMuPDF)** yang sangat cepat, namun telah dioptimalkan agar membaca **tabel secara utuh sesuai aslinya (16+ Kolom)** tanpa memotong atau menggabungkan data.")
     pdf_files_t4 = st.file_uploader("Upload File PDF Laporan", type=['pdf'], accept_multiple_files=True, key="t4_pdf")
 
     if st.button("🚀 Proses & Ekstrak Data (Tab 4)", type="primary"):
-        if not pdf_files_t4: 
-            st.error("Silakan unggah setidaknya satu file PDF.")
-        elif not PYMUPDF_SUPPORT: 
-            st.error("⚠️ Library `pymupdf` belum terpasang!")
+        if not pdf_files_t4: st.error("Silakan unggah setidaknya satu file PDF.")
+        elif not PYMUPDF_SUPPORT: st.error("⚠️ Library `pymupdf` belum terpasang!")
         else:
             all_extracted_rows = []
             master_headers = None
             
-            with st.spinner("🚀 Mengekstraksi PDF dengan Mode Cepat..."):
+            with st.spinner("🚀 Mengekstraksi PDF dengan Mode Turbo Cepat & Rapih..."):
                 progress_bar = st.progress(0)
                 status_text = st.empty()
                 total_files = len(pdf_files_t4)
@@ -991,8 +932,6 @@ with tab4:
 
                 for f_idx, uploaded_pdf in enumerate(pdf_files_t4):
                     fname = uploaded_pdf.name
-                    
-                    # Simpan ke temp file agar bisa dibaca kilat oleh fitz
                     with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp: 
                         tmp.write(uploaded_pdf.getvalue())
                         tmp_pdf_path = tmp.name
@@ -1000,85 +939,60 @@ with tab4:
                     try:
                         doc = fitz.open(tmp_pdf_path)
                         total_hal = len(doc)
-
                         for i, page in enumerate(doc):
-                            # MESIN TURBO BARU: Ekstrak grid tabel langsung
                             tabs = page.find_tables()
-                            
                             if tabs.tables:
                                 for tab in tabs.tables:
                                     raw_data = tab.extract()
-                                    
-                                    if not raw_data or len(raw_data) < 2:
-                                        continue
+                                    if not raw_data or len(raw_data) < 2: continue
                                         
                                     cleaned_table = []
                                     for row in raw_data:
-                                        # Bersihkan enter (\n) yang membuat data bertumpuk
                                         cleaned_row = [str(c).replace('\n', ' ').strip() if c is not None else "" for c in row]
-                                        if any(cleaned_row):
-                                            cleaned_table.append(cleaned_row)
+                                        if any(cleaned_row): cleaned_table.append(cleaned_row)
                                             
-                                    if not cleaned_table:
-                                        continue
+                                    if not cleaned_table: continue
                                         
-                                    # Cari Header Master (di halaman 1)
                                     if master_headers is None:
                                         header_keywords = ['NO. AGENDA', 'NAMA PEMOHON', 'NOPEL', 'NO. SIP']
                                         for r_idx, row in enumerate(cleaned_table[:10]):
                                             row_str = " ".join([c.upper() for c in row])
                                             if any(kw in row_str for kw in header_keywords):
                                                 master_headers = row
-                                                # Potong header dari data baris
                                                 cleaned_table = cleaned_table[r_idx + 1:]
                                                 break
-                                        
                                         if master_headers is None:
                                             master_headers = [f"Kolom_{x+1}" for x in range(len(cleaned_table[0]))]
 
-                                    # Masukkan baris data
                                     for row in cleaned_table:
                                         row_str = " ".join([c.upper() for c in row])
-                                        # Abaikan header yang terulang di setiap pergantian halaman PDF
-                                        if any(kw in row_str for kw in ['NO. AGENDA', 'NAMA PEMOHON', 'NOPEL', 'HALAMAN']):
-                                            continue
+                                        if any(kw in row_str for kw in ['NO. AGENDA', 'NAMA PEMOHON', 'NOPEL', 'HALAMAN']): continue
                                             
-                                        # Samakan jumlah sel dengan header agar tidak error di Excel
-                                        if len(row) < len(master_headers):
-                                            row.extend([""] * (len(master_headers) - len(row)))
-                                        elif len(row) > len(master_headers):
-                                            row = row[:len(master_headers)]
+                                        if len(row) < len(master_headers): row.extend([""] * (len(master_headers) - len(row)))
+                                        elif len(row) > len(master_headers): row = row[:len(master_headers)]
                                             
                                         all_extracted_rows.append(row)
                                         total_baris += 1
 
-                            # Update progress bar dengan aman ke memory
                             fitz.TOOLS.store_shrink(100)
                             current_progress = (f_idx + ((i + 1) / max(1, total_hal))) / total_files
                             progress_bar.progress(min(1.0, current_progress))
                             status_text.text(f"⚡ File {f_idx+1}/{total_files} ({fname}): Halaman {i+1}/{total_hal} (Terkumpul: {total_baris} baris)...")
-
                         doc.close()
                     except Exception as e:
                         st.error(f"Gagal memproses file {fname}: {str(e)}")
                     finally:
-                        if os.path.exists(tmp_pdf_path): 
-                            os.remove(tmp_pdf_path)
+                        if os.path.exists(tmp_pdf_path): os.remove(tmp_pdf_path)
                         gc.collect()
 
-            # Proses Akhir Pembuatan Excel
             if all_extracted_rows and master_headers:
                 status_text.empty()
                 progress_bar.progress(1.0)
-                
-                # JADIKAN NAMA KOLOM UNIK MENCEGAH ERROR PYARROW
                 unique_headers = []
                 dilihat = {}
                 for idx, col in enumerate(master_headers):
                     col_bersih = str(col).replace('\n', ' ').strip()
-                    if not col_bersih:
-                        col_bersih = f"Kolom_Kosong_{idx+1}"
-                        
+                    if not col_bersih: col_bersih = f"Kolom_Kosong_{idx+1}"
                     if col_bersih in dilihat:
                         dilihat[col_bersih] += 1
                         unique_headers.append(f"{col_bersih}_{dilihat[col_bersih]}")
@@ -1087,31 +1001,21 @@ with tab4:
                         unique_headers.append(col_bersih)
                 
                 df_final = pd.DataFrame(all_extracted_rows, columns=unique_headers)
-                # Bersihkan baris yang hanya berisi spasi/kosong
                 df_final = df_final.replace(r'^\s*$', np.nan, regex=True).dropna(how='all')
                 df_final = df_final.fillna("")
                 
                 st.success(f"🎉 Selesai Cepat! Berhasil mengekstraksi {len(df_final)} baris data format utuh!")
                 st.dataframe(df_final.head(50), use_container_width=True)
-                
-                st.download_button(
-                    "📥 Download Ekstrak PDF Tipe 2 (.xlsx)", 
-                    data=to_excel_bytes(df_final), 
-                    file_name="Hasil_Ekstrak_Tipe2_Turbo_Rapih.xlsx", 
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", 
-                    type="primary"
-                )
+                st.download_button("📥 Download Ekstrak PDF Tipe 2 (.xlsx)", data=to_excel_bytes(df_final), file_name="Hasil_Ekstrak_Tipe2_Turbo_Rapih.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", type="primary")
             else:
                 st.warning("⚠️ Tidak ada data tabel yang terdeteksi.")
-
 
 # ==========================================
 # TAB 5: PARSING BANYAK FILE ICONPRN KE EXCEL
 # ==========================================
 with tab5:
     st.header("Tahap 5: Rekap Data ICONPRN")
-    st.markdown("Ekstraksi file teks `.iconprn` menjadi file Excel tagihan.")
-    
+    st.markdown("Ekstraksi file teks `.iconprn` menjadi file Excel tagihan gabungan secara otomatis.")
     iconprn_files = st.file_uploader("Upload File .iconprn", accept_multiple_files=True, key="t5_iconprn")
     
     if st.button("Proses File ICONPRN", type="primary"):
@@ -1126,10 +1030,8 @@ with tab5:
                     match_daya = re.search(r'/(\d+)', str(tarif_daya))
                     if match_daya: daya = int(match_daya.group(1))
                     if daya > 33000: return "PLN"
-                    
                     idpel_khusus = {"524051069054": "c28", "524051263717": "c36", "524051265123": "c36", "524051104194": "c04", "524051000615": "c08", "524050867033": "c08"}
                     if str(idpel) in idpel_khusus: return idpel_khusus[str(idpel)]
-                        
                     if len(str(kddk)) >= 6:
                         kode_mid = str(kddk)[3:6].upper()
                         mapping_kddk = {
@@ -1150,10 +1052,8 @@ with tab5:
                     try:
                         content = file.getvalue().decode('utf-8', errors='ignore')
                         blok_pelanggan = re.split(r'PEMBERITAHUAN PELAKSANAAN PEMUTUSAN', content)
-                        
                         for blok in blok_pelanggan:
                             if "ID. Pelanggan" not in blok: continue
-                            
                             data = {
                                 'IDPEL': "", 'Nomor TUL': "", 'Nama': "", 'KDDK': "", 'Gardu/Tiang': "", 
                                 'Loket': "", 'Alamat': "", 'Nomor Meter': "", 'Tarif/Daya': "", 'Kelompok': "", 
@@ -1163,28 +1063,23 @@ with tab5:
                             
                             idpel = re.search(r'ID\. Pelanggan\s*:\s*[^0-9]*(\d{11,13})', blok)
                             if idpel: data['IDPEL'] = str(idpel.group(1).strip())
-
                             tul = re.search(r'NO\. TUL\s*:\s*([A-Z0-9/\-]+)', blok)
                             if tul: data['Nomor TUL'] = tul.group(1).strip()
-
                             nama = re.search(r'Nama\s*:\s*(.+)', blok)
                             if nama: data['Nama'] = nama.group(1).strip()
-
                             kddk = re.search(r'Kode Kedudukan\s*:\s*([A-Z0-9]+)', blok)
                             if kddk: data['KDDK'] = kddk.group(1).strip()
-
                             gardu = re.search(r'Gardu\s*/?\s*Tiang\s*:\s*(.*?)(?=\s{2,}|\s+Loket\s*:|\n|\r|$)', blok, re.IGNORECASE)
                             if gardu: data['Gardu/Tiang'] = gardu.group(1).strip()
-
                             loket = re.search(r'Loket\s*:\s*(.*?)(?=\s{2,}|\s+Tarip|\s+Tarif|\s+Alamat|\s+Kelompok|\n|\r|$)', blok, re.IGNORECASE)
                             if loket: 
                                 val_loket = loket.group(1).strip()
                                 if "Tarip" in val_loket or "Kelompok" in val_loket or "Daya" in val_loket: val_loket = ""
                                 data['Loket'] = val_loket
-
                             alamat = re.search(r'Alamat\s*:\s*(.+)', blok)
                             if alamat: data['Alamat'] = alamat.group(1).strip()
-
+                            
+                            # MEMAKAI REGEX YANG BENAR (A-Z0-9)
                             meter = re.search(r'Nomor Meter\s*:\s*([A-Z0-9]+)', blok, re.IGNORECASE)
                             if meter: data['Nomor Meter'] = str(meter.group(1).strip())
 
@@ -1216,7 +1111,6 @@ with tab5:
 
                             data['petugas'] = tentukan_petugas(data['IDPEL'], data['Tarif/Daya'], data['KDDK'])
                             semua_hasil.append(data)
-
                     except Exception as e:
                         st.error(f"Gagal membaca file {file.name}: {str(e)}")
 
@@ -1224,14 +1118,7 @@ with tab5:
                     df_hasil = pd.DataFrame(semua_hasil)
                     st.success(f"✅ Berhasil mengekstrak {len(df_hasil)} data tagihan!")
                     st.dataframe(df_hasil.head(50), use_container_width=True)
-                    
-                    st.download_button(
-                        "📥 Download Rekap Tagihan ICONPRN (.xlsx)", 
-                        data=to_excel_bytes(df_hasil), 
-                        file_name="rekap_tagihan_gabungan.xlsx", 
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", 
-                        type="primary"
-                    )
+                    st.download_button("📥 Download Rekap Tagihan ICONPRN (.xlsx)", data=to_excel_bytes(df_hasil), file_name="rekap_tagihan_gabungan.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", type="primary")
                 else:
                     st.warning("⚠️ Tidak ada data tagihan valid yang ditemukan.")
 
@@ -1242,17 +1129,10 @@ with tab6:
     st.header("Tahap 6: Update / Lengkapi Data dari Master Data")
     st.markdown("Meng-update / melengkapi **Data LAMA (file yang ingin dicarikan datanya)** menggunakan **Data BARU (Master Data)** berdasarkan IDPEL. Data bersimbol bintang (`*`) tidak akan menimpa data.")
     tampilkan_info_header_master()
-    
     col_t6_1, col_t6_2 = st.columns(2)
-    with col_t6_1:
-        file_lama_m = st.file_uploader("Upload File Excel Data LAMA (Data yang ingin dilengkapi)", type=['xlsx', 'xls'], key="t6_lama")
+    with col_t6_1: file_lama_m = st.file_uploader("Upload File Excel Data LAMA (Data yang ingin dilengkapi)", type=['xlsx', 'xls'], key="t6_lama")
     with col_t6_2:
-        sumber_baru_t6 = st.radio(
-            "Sumber Data BARU (Master Data Referensi):",
-            ["Upload File Excel", "Ambil dari Supabase (dataplg3)"],
-            horizontal=True,
-            key="sumber_baru_t6"
-        )
+        sumber_baru_t6 = st.radio("Sumber Data BARU (Master Data Referensi):", ["Upload File Excel", "Ambil dari Supabase (dataplg3)"], horizontal=True, key="sumber_baru_t6")
         if sumber_baru_t6 == "Upload File Excel":
             file_baru_m = st.file_uploader("Upload File Excel Data BARU (Master Data)", type=['xlsx', 'xls'], key="t6_baru")
             tambah_baris_baru_t6 = st.checkbox("Tambahkan juga IDPEL baru dari file kedua jika belum ada di file pertama", value=True, key="t6_add_new")
@@ -1268,32 +1148,22 @@ with tab6:
             with st.spinner("Memproses sinkronisasi dari master data..."):
                 try:
                     df_lama = pd.read_excel(file_lama_m, dtype=str)
-                    
-                    if sumber_baru_t6 == "Ambil dari Supabase (dataplg3)":
-                        df_baru = fetch_master_supabase("*").astype(str)
-                    else:
-                        df_baru = pd.read_excel(file_baru_m, dtype=str)
+                    if sumber_baru_t6 == "Ambil dari Supabase (dataplg3)": df_baru = fetch_master_supabase("*").astype(str)
+                    else: df_baru = pd.read_excel(file_baru_m, dtype=str)
 
                     kolom_asli_lama = df_lama.columns.tolist()
-
                     df_lama.columns = df_lama.columns.astype(str).str.strip().str.lower()
                     df_baru.columns = df_baru.columns.astype(str).str.strip().str.lower()
 
-                    if 'koked' in df_lama.columns and 'kddk' in df_baru.columns and 'koked' not in df_baru.columns:
-                        df_baru.rename(columns={'kddk': 'koked'}, inplace=True)
-                    elif 'kddk' in df_lama.columns and 'koked' in df_baru.columns and 'kddk' not in df_baru.columns:
-                        df_baru.rename(columns={'koked': 'kddk'}, inplace=True)
-
-                    if 'tarip' in df_lama.columns and 'tarif' in df_baru.columns and 'tarip' not in df_baru.columns:
-                        df_baru.rename(columns={'tarif': 'tarip'}, inplace=True)
-                    elif 'tarif' in df_lama.columns and 'tarip' in df_baru.columns and 'tarif' not in df_baru.columns:
-                        df_baru.rename(columns={'tarip': 'tarif'}, inplace=True)
+                    if 'koked' in df_lama.columns and 'kddk' in df_baru.columns and 'koked' not in df_baru.columns: df_baru.rename(columns={'kddk': 'koked'}, inplace=True)
+                    elif 'kddk' in df_lama.columns and 'koked' in df_baru.columns and 'kddk' not in df_baru.columns: df_baru.rename(columns={'koked': 'kddk'}, inplace=True)
+                    if 'tarip' in df_lama.columns and 'tarif' in df_baru.columns and 'tarip' not in df_baru.columns: df_baru.rename(columns={'tarif': 'tarip'}, inplace=True)
+                    elif 'tarif' in df_lama.columns and 'tarip' in df_baru.columns and 'tarif' not in df_baru.columns: df_baru.rename(columns={'tarip': 'tarif'}, inplace=True)
 
                     kolom_yang_sama = df_baru.columns.intersection(df_lama.columns)
                     df_baru = df_baru[kolom_yang_sama]
 
-                    if 'idpel' not in df_lama.columns or 'idpel' not in df_baru.columns:
-                        st.error("❌ Kolom 'IDPEL' tidak ditemukan di salah satu sumber data!")
+                    if 'idpel' not in df_lama.columns or 'idpel' not in df_baru.columns: st.error("❌ Kolom 'IDPEL' tidak ditemukan di salah satu sumber data!")
                     else:
                         df_lama['idpel'] = df_lama['idpel'].str.replace('.0', '', regex=False).str.strip()
                         df_baru['idpel'] = df_baru['idpel'].str.replace('.0', '', regex=False).str.strip()
@@ -1312,32 +1182,20 @@ with tab6:
                             def bersihkan_sel(val):
                                 if pd.isna(val): return np.nan
                                 s = str(val).strip()
-                                if '*' in s or s.lower() in ['nan', 'none', '<na>'] or s == '':
-                                    return np.nan
+                                if '*' in s or s.lower() in ['nan', 'none', '<na>'] or s == '': return np.nan
                                 return val
-
                             df_update_clean = df_baru_exist.apply(lambda col: col.map(bersihkan_sel))
                             df_lama.update(df_update_clean)
 
-                        if tambah_baris_baru_t6 and not df_baru_new.empty:
-                            df_lama = pd.concat([df_lama, df_baru_new])
+                        if tambah_baris_baru_t6 and not df_baru_new.empty: df_lama = pd.concat([df_lama, df_baru_new])
 
                         df_lama.reset_index(inplace=True)
-
                         mapping_kolom = dict(zip([c.lower() for c in kolom_asli_lama], kolom_asli_lama))
                         df_lama.rename(columns=mapping_kolom, inplace=True)
 
                         st.success(f"✅ Berhasil memperbarui data! Total data sekarang: {len(df_lama)} baris.")
                         st.dataframe(df_lama.head(50), use_container_width=True)
-
-                        st.download_button(
-                            "📥 Download Data Updated (.xlsx)", 
-                            data=to_excel_bytes(df_lama), 
-                            file_name="Data_Updated_Tab6.xlsx", 
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", 
-                            type="primary"
-                        )
-
+                        st.download_button("📥 Download Data Updated (.xlsx)", data=to_excel_bytes(df_lama), file_name="Data_Updated_Tab6.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", type="primary")
                 except Exception as e:
                     st.error(f"❌ Terjadi kesalahan: {str(e)}")
                     
@@ -1346,12 +1204,10 @@ with tab6:
 # ==========================================
 with tab7:
     st.header("Tahap 7: Info Data & Lokasi Pelanggan")
-    st.markdown("Untuk mencari data pelanggan berdasar idpel, nama, nomormeter")
+    st.markdown("Digunakan untuk mencari data pelanggan berdasar idpel, nama, nomormeter")
     tampilkan_info_header_master()
-    
     try:
         supabase = init_koneksi()
-        
         with st.form(key="form_pencarian_supabase"):
             kategori = st.selectbox("🎯 Pilih Dasar Pencarian:", ["IDPEL", "NAMA", "NOMOR METER", "SEMUA KOLOM"])
             kata_kunci = st.text_input("🔍 Masukkan Kata Kunci:")
@@ -1359,30 +1215,22 @@ with tab7:
             
         if tombol_cari and kata_kunci:
             kunci_bersih = str(kata_kunci).strip()
-            
             with st.spinner("Mencari langsung di Database Server..."):
-                if kategori == "IDPEL":
-                    respon = supabase.table("dataplg3").select("*").ilike("IDPEL", f"%{kunci_bersih}%").execute()
-                elif kategori == "NAMA":
-                    respon = supabase.table("dataplg3").select("*").ilike("NAMA", f"%{kunci_bersih}%").execute()
-                elif kategori == "NOMOR METER":
-                    respon = supabase.table("dataplg3").select("*").ilike("NOMORKWH", f"%{kunci_bersih}%").execute()
+                if kategori == "IDPEL": respon = supabase.table("dataplg3").select("*").ilike("IDPEL", f"%{kunci_bersih}%").execute()
+                elif kategori == "NAMA": respon = supabase.table("dataplg3").select("*").ilike("NAMA", f"%{kunci_bersih}%").execute()
+                elif kategori == "NOMOR METER": respon = supabase.table("dataplg3").select("*").ilike("NOMORKWH", f"%{kunci_bersih}%").execute()
                 else: 
                     kondisi_or = f"IDPEL.ilike.%{kunci_bersih}%,NAMA.ilike.%{kunci_bersih}%,ALAMAT.ilike.%{kunci_bersih}%,NOMORKWH.ilike.%{kunci_bersih}%"
                     respon = supabase.table("dataplg3").select("*").or_(kondisi_or).execute()
-                
                 data_hasil = respon.data 
                 
             if len(data_hasil) > 0:
                 st.success(f"**Berhasil! Ditemukan {len(data_hasil)} :**")
-                
                 for baris in data_hasil:
                     id_val = baris.get('IDPEL', 'Detail')
                     nama_val = baris.get('NAMA', '')
-                    
                     teks_judul = f"👤 {id_val}"
-                    if str(nama_val).strip() != '':
-                        teks_judul += f" - {nama_val}"
+                    if str(nama_val).strip() != '': teks_judul += f" - {nama_val}"
                         
                     with st.expander(teks_judul):
                         for nama_kolom, isi_kolom in baris.items():
@@ -1392,18 +1240,13 @@ with tab7:
                         lat_val, lon_val = None, None
                         kx = baris.get("KOORDINAT X", "")
                         ky = baris.get("KOORDINAT Y", "")
-                        
                         try:
                             if kx and ky:
                                 num_x = float(str(kx).replace(',', '.'))
                                 num_y = float(str(ky).replace(',', '.'))
-                                
-                                if -11.0 <= num_x <= 6.0:
-                                    lat_val, lon_val = str(num_x), str(num_y)
-                                elif -11.0 <= num_y <= 6.0:
-                                    lat_val, lon_val = str(num_y), str(num_x)
-                        except (ValueError, TypeError):
-                            pass
+                                if -11.0 <= num_x <= 6.0: lat_val, lon_val = str(num_x), str(num_y)
+                                elif -11.0 <= num_y <= 6.0: lat_val, lon_val = str(num_y), str(num_x)
+                        except (ValueError, TypeError): pass
                             
                         st.markdown("---")
                         if lat_val and lon_val:
@@ -1413,7 +1256,6 @@ with tab7:
                             st.warning("⚠️ Data koordinat lokasi tidak ditemukan atau format tidak sesuai.")
             else:
                 st.error("❌ Data tidak ditemukan di Database. Cek kembali penulisan kata kunci.")
-                
     except Exception as e:
         st.error(f"Gagal menghubungkan ke database: {str(e)}")
         
@@ -1425,19 +1267,11 @@ with tab8:
     st.write("Mengisi kolom yang KOSONG di **Data LAMA (file yang ingin dilengkapi)** dengan data dari **Data BARU (Master Data)** berdasarkan IDPEL. TIDAK MENAMBAH KOLOM BARU dan data yang sudah terisi TIDAK akan ditimpa.")
     tampilkan_info_header_master()
     st.markdown("---")
-
     col_l, col_b = st.columns(2)
-    with col_l:
-        file_lama = st.file_uploader("Upload File Excel Data LAMA (Data yang ingin dilengkapi)", type=['xlsx', 'xls'], key="t8_lama")
+    with col_l: file_lama = st.file_uploader("Upload File Excel Data LAMA (Data yang ingin dilengkapi)", type=['xlsx', 'xls'], key="t8_lama")
     with col_b:
-        sumber_baru_t8 = st.radio(
-            "Sumber Data BARU (Master Data Referensi):",
-            ["Upload File Excel", "Ambil dari Supabase (dataplg3)"],
-            horizontal=True,
-            key="sumber_baru_t8"
-        )
-        if sumber_baru_t8 == "Upload File Excel":
-            file_baru = st.file_uploader("Upload File Excel Data BARU (Master Data)", type=['xlsx', 'xls'], key="t8_baru")
+        sumber_baru_t8 = st.radio("Sumber Data BARU (Master Data Referensi):", ["Upload File Excel", "Ambil dari Supabase (dataplg3)"], horizontal=True, key="sumber_baru_t8")
+        if sumber_baru_t8 == "Upload File Excel": file_baru = st.file_uploader("Upload File Excel Data BARU (Master Data)", type=['xlsx', 'xls'], key="t8_baru")
         else:
             file_baru = None
             st.success("✅ Data BARU (Master Data) akan diambil otomatis dari tabel `dataplg3` Supabase.")
@@ -1449,11 +1283,8 @@ with tab8:
             with st.spinner("Sedang memproses pengisian data dari Master..."):
                 try:
                     df_lama = pd.read_excel(file_lama, dtype=str)
-                    
-                    if sumber_baru_t8 == "Ambil dari Supabase (dataplg3)":
-                        df_baru = fetch_master_supabase("*").astype(str)
-                    else:
-                        df_baru = pd.read_excel(file_baru, dtype=str)
+                    if sumber_baru_t8 == "Ambil dari Supabase (dataplg3)": df_baru = fetch_master_supabase("*").astype(str)
+                    else: df_baru = pd.read_excel(file_baru, dtype=str)
 
                     def buat_kolom_unik(daftar_kolom):
                         dilihat = {}
@@ -1469,19 +1300,13 @@ with tab8:
 
                     cols_lama = df_lama.columns.astype(str).str.strip().str.lower()
                     cols_baru = df_baru.columns.astype(str).str.strip().str.lower()
-
                     df_lama.columns = buat_kolom_unik(cols_lama)
                     df_baru.columns = buat_kolom_unik(cols_baru)
                     
-                    if 'koked' in df_lama.columns and 'kddk' in df_baru.columns and 'koked' not in df_baru.columns:
-                        df_baru.rename(columns={'kddk': 'koked'}, inplace=True)
-                    elif 'kddk' in df_lama.columns and 'koked' in df_baru.columns and 'kddk' not in df_baru.columns:
-                        df_baru.rename(columns={'koked': 'kddk'}, inplace=True)
-
-                    if 'tarip' in df_lama.columns and 'tarif' in df_baru.columns and 'tarip' not in df_baru.columns:
-                        df_baru.rename(columns={'tarif': 'tarip'}, inplace=True)
-                    elif 'tarif' in df_lama.columns and 'tarip' in df_baru.columns and 'tarif' not in df_baru.columns:
-                        df_baru.rename(columns={'tarip': 'tarif'}, inplace=True)
+                    if 'koked' in df_lama.columns and 'kddk' in df_baru.columns and 'koked' not in df_baru.columns: df_baru.rename(columns={'kddk': 'koked'}, inplace=True)
+                    elif 'kddk' in df_lama.columns and 'koked' in df_baru.columns and 'kddk' not in df_baru.columns: df_baru.rename(columns={'koked': 'kddk'}, inplace=True)
+                    if 'tarip' in df_lama.columns and 'tarif' in df_baru.columns and 'tarip' not in df_baru.columns: df_baru.rename(columns={'tarif': 'tarip'}, inplace=True)
+                    elif 'tarif' in df_lama.columns and 'tarip' in df_baru.columns and 'tarif' not in df_baru.columns: df_baru.rename(columns={'tarip': 'tarif'}, inplace=True)
 
                     kolom_format_lama = df_lama.columns.tolist()
 
@@ -1494,19 +1319,16 @@ with tab8:
                         for col in df_lama.columns:
                             df_lama[col] = df_lama[col].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
                             df_lama[col] = df_lama[col].replace(['nan', 'None', '<NA>'], np.nan)
-                        
                         for col in df_baru.columns:
                             df_baru[col] = df_baru[col].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
                             df_baru[col] = df_baru[col].replace(['nan', 'None', '<NA>'], np.nan)
 
                         df_lama = df_lama.drop_duplicates(subset=['idpel'], keep='first')
                         df_baru = df_baru.drop_duplicates(subset=['idpel'], keep='first')
-
                         df_lama.set_index('idpel', inplace=True)
                         df_baru.set_index('idpel', inplace=True)
 
                         df_lama.update(df_baru, overwrite=False)
-
                         df_lama.reset_index(inplace=True)
                         df_result = df_lama[kolom_format_lama]
 
@@ -1522,7 +1344,6 @@ with tab8:
                         output_t8 = io.BytesIO()
                         with pd.ExcelWriter(output_t8, engine='openpyxl') as writer:
                             df_export.to_excel(writer, index=False, sheet_name='Master_Updated')
-                            
                             ws = writer.sheets['Master_Updated']
                             for col in ws.columns:
                                 max_len = 0
@@ -1532,20 +1353,11 @@ with tab8:
                                         cell.value = str(cell.value)
                                         cell.data_type = 's'
                                         cell.number_format = '@'
-
                                     val_str = str(cell.value) if cell.value is not None else ""
                                     max_len = max(max_len, len(val_str))
-                                
                                 ws.column_dimensions[col_letter].width = max(max_len + 3, 12)
 
-                        st.download_button(
-                            label="⬇️ Download Hasil Lengkapi Data (.xlsx)",
-                            data=output_t8.getvalue(),
-                            file_name="Data_Dilengkapi_Master.xlsx",
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                            key="t8_download"
-                        )
-
+                        st.download_button(label="⬇️ Download Hasil Lengkapi Data (.xlsx)", data=output_t8.getvalue(), file_name="Data_Dilengkapi_Master.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key="t8_download")
                 except Exception as e:
                     st.error(f"❌ Terjadi kesalahan saat memproses data: {e}")
 
@@ -1556,23 +1368,18 @@ with tab9:
     st.header("Tahap 9: Penentuan Petugas Otomatis")
     st.write("Mengisi kolom Petugas secara otomatis berdasarkan logika Daya > 33000 (PLN), IDPEL khusus, dan 3 karakter tengah KOKED/KDDK.")
     st.markdown("---")
-
     file_t9 = st.file_uploader("Upload File Excel (Memiliki kolom IDPEL, KOKED/KDDK, DAYA)", type=['xlsx', 'xls'], key="t9_file")
 
     if st.button("Proses & Isi Petugas", type="primary"):
-        if file_t9 is None:
-            st.warning("⚠️ Harap upload file Excel terlebih dahulu!")
+        if file_t9 is None: st.warning("⚠️ Harap upload file Excel terlebih dahulu!")
         else:
             with st.spinner("Sedang memproses penentuan petugas..."):
                 try:
                     df = pd.read_excel(file_t9, dtype=str)
-                    
                     df_work = df.copy()
                     df_work.columns = df_work.columns.astype(str).str.strip().str.lower()
 
-                    if 'kddk' in df_work.columns and 'koked' not in df_work.columns:
-                        df_work['koked'] = df_work['kddk']
-
+                    if 'kddk' in df_work.columns and 'koked' not in df_work.columns: df_work['koked'] = df_work['kddk']
                     if not {'idpel', 'koked', 'daya'}.issubset(set(df_work.columns)):
                         st.error("❌ Error: File Excel harus memiliki kolom bernama 'IDPEL', 'KOKED' (atau 'KDDK'), dan 'DAYA'.")
                     else:
@@ -1580,21 +1387,18 @@ with tab9:
                             try:
                                 daya_val = str(row['daya']).replace(',', '.').strip()
                                 daya = float(daya_val)
-                            except:
-                                daya = 0.0
+                            except: daya = 0.0
 
                             idpel = str(row['idpel']).replace('.0', '').strip() if pd.notna(row['idpel']) and str(row['idpel']).lower() != 'nan' else ""
                             koked = str(row['koked']).strip() if pd.notna(row['koked']) and str(row['koked']).lower() != 'nan' else ""
 
-                            if daya > 33000:
-                                return "PLN"
+                            if daya > 33000: return "PLN"
                             
                             idpel_khusus = {
                                 "524051069054": "c28", "524051263717": "c36", "524051265123": "c36",
                                 "524051104194": "c04", "524051000615": "c08", "524050867033": "c08"
                             }
-                            if idpel in idpel_khusus:
-                                return idpel_khusus[idpel]
+                            if idpel in idpel_khusus: return idpel_khusus[idpel]
                             
                             if len(koked) >= 6:
                                 kode_mid = koked[3:6].upper()
@@ -1609,19 +1413,14 @@ with tab9:
                                     "MBD": "c36", "KCJ": "c29", "NBJ": "c28", "TAI": "c26", "BBD": "c19",
                                     "KCG": "c29", "MBM": "c23"
                                 }
-                                if kode_mid in mapping_kddk:
-                                    return mapping_kddk[kode_mid]
-                            
+                                if kode_mid in mapping_kddk: return mapping_kddk[kode_mid]
                             return "BARU"
 
                         hasil_petugas = df_work.apply(tentukan_petugas_tab9, axis=1)
-
                         col_petugas_asli = next((c for c in df.columns if str(c).strip().lower() == 'petugas'), None)
                         
-                        if col_petugas_asli:
-                            df[col_petugas_asli] = hasil_petugas
-                        else:
-                            df['petugas'] = hasil_petugas
+                        if col_petugas_asli: df[col_petugas_asli] = hasil_petugas
+                        else: df['petugas'] = hasil_petugas
 
                         for col in df.columns:
                             df[col] = df[col].fillna("").astype(str)
@@ -1636,7 +1435,6 @@ with tab9:
                         output = io.BytesIO()
                         with pd.ExcelWriter(output, engine='openpyxl') as writer:
                             df.to_excel(writer, index=False, sheet_name='Data_Petugas')
-                            
                             ws = writer.sheets['Data_Petugas']
                             for col in ws.columns:
                                 max_len = 0
@@ -1646,19 +1444,11 @@ with tab9:
                                         cell.value = str(cell.value)
                                         cell.data_type = 's'
                                         cell.number_format = '@'
-
                                     val_str = str(cell.value) if cell.value is not None else ""
                                     max_len = max(max_len, len(val_str))
-                                
                                 ws.column_dimensions[col_letter].width = max(max_len + 3, 12)
 
-                        st.download_button(
-                            label="⬇️ Download Hasil Excel",
-                            data=output.getvalue(),
-                            file_name="Data_Isi_Petugas.xlsx",
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                            key="t9_download"
-                        )
+                        st.download_button(label="⬇️ Download Hasil Excel", data=output.getvalue(), file_name="Data_Isi_Petugas.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key="t9_download")
                 except Exception as e:
                     st.error(f"❌ Terjadi kesalahan saat memproses data: {e}")
 
@@ -1669,13 +1459,11 @@ with tab10:
     st.header("Tahap 10: Split Data ke Beberapa Worksheet atau File")
     st.write("Membagi satu tabel data menjadi beberapa worksheet (sheet) atau file Excel terpisah berdasarkan nilai pada kolom tertentu.")
     st.markdown("---")
-
     file_t10 = st.file_uploader("Upload File Excel yang ingin di-split", type=['xlsx', 'xls'], key="t10_file")
 
     if file_t10 is not None:
         try:
             df_t10 = pd.read_excel(file_t10, dtype=str)
-            
             for col in df_t10.columns:
                 df_t10[col] = df_t10[col].fillna("").astype(str)
                 df_t10[col] = df_t10[col].replace({'nan': '', 'None': '', '<NA>': ''})
@@ -1686,24 +1474,16 @@ with tab10:
             st.dataframe(df_t10.head(), use_container_width=True)
 
             st.markdown("### Pengaturan Split Data")
-            
             kolom_pilihan = st.selectbox("Split berdasarkan kolom (Specific column):", df_t10.columns.tolist())
 
             col1, col2 = st.columns(2)
-            with col1:
-                prefix = st.text_input("Prefix (opsional):", help="Tambahan teks di depan nama sheet/file")
-            with col2:
-                suffix = st.text_input("Suffix (opsional):", help="Misal: Nik Padan")
+            with col1: prefix = st.text_input("Prefix (opsional):", help="Tambahan teks di depan nama sheet/file")
+            with col2: suffix = st.text_input("Suffix (opsional):", help="Misal: Nik Padan")
 
-            mode_split = st.radio(
-                "Pilih Mode Output:", 
-                ["Multiple Sheets (1 File Excel)", "Multiple Files (Download sebagai ZIP)"],
-                help="Pilih apakah ingin hasil split berada dalam 1 file beda sheet, atau file yang benar-benar terpisah."
-            )
+            mode_split = st.radio("Pilih Mode Output:", ["Multiple Sheets (1 File Excel)", "Multiple Files (Download sebagai ZIP)"], help="Pilih apakah ingin hasil split berada dalam 1 file beda sheet, atau file yang benar-benar terpisah.")
 
             if st.button("Proses Split Data", type="primary"):
                 with st.spinner("Sedang membagi data..."):
-                    
                     df_t10_filtered = df_t10[df_t10[kolom_pilihan].str.strip() != ""]
                     nilai_unik = df_t10_filtered[kolom_pilihan].unique()
 
@@ -1712,14 +1492,12 @@ with tab10:
                         with pd.ExcelWriter(output_t10, engine='openpyxl') as writer:
                             for nilai in nilai_unik:
                                 df_filtered = df_t10[df_t10[kolom_pilihan] == nilai]
-
                                 nilai_str = str(nilai).strip()
                                 nama_custom = f"{prefix} {nilai_str} {suffix}".strip()
                                 nama_bersih = re.sub(r'[\\/*?:\[\]]', '', nama_custom)[:31]
                                 if not nama_bersih: nama_bersih = "Data"
 
                                 df_filtered.to_excel(writer, index=False, sheet_name=nama_bersih)
-
                                 ws = writer.sheets[nama_bersih]
                                 for col in ws.columns:
                                     max_len = 0
@@ -1734,20 +1512,13 @@ with tab10:
                                     ws.column_dimensions[col_letter].width = max(max_len + 3, 12)
 
                         st.success(f"✅ Data berhasil dipisah menjadi {len(nilai_unik)} sheet dalam 1 file Excel!")
-                        st.download_button(
-                            label="⬇️ Download Excel (Multiple Sheets)",
-                            data=output_t10.getvalue(),
-                            file_name=f"Data_Split_{kolom_pilihan}_Sheets.xlsx",
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                            key="t10_download_sheets"
-                        )
+                        st.download_button(label="⬇️ Download Excel (Multiple Sheets)", data=output_t10.getvalue(), file_name=f"Data_Split_{kolom_pilihan}_Sheets.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key="t10_download_sheets")
 
                     else:
                         zip_buffer = io.BytesIO()
                         with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
                             for nilai in nilai_unik:
                                 df_filtered = df_t10[df_t10[kolom_pilihan] == nilai]
-                                
                                 nilai_str = str(nilai).strip()
                                 nama_custom = f"{prefix} {nilai_str} {suffix}".strip()
                                 nama_bersih = re.sub(r'[\\/*?:\[\]<>|"]', '', nama_custom)
@@ -1757,7 +1528,6 @@ with tab10:
                                 excel_buffer = io.BytesIO()
                                 with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
                                     df_filtered.to_excel(writer, index=False, sheet_name="Data")
-                                    
                                     ws = writer.sheets["Data"]
                                     for col in ws.columns:
                                         max_len = 0
@@ -1770,88 +1540,64 @@ with tab10:
                                             val_str = str(cell.value) if cell.value is not None else ""
                                             max_len = max(max_len, len(val_str))
                                         ws.column_dimensions[col_letter].width = max(max_len + 3, 12)
-                                
                                 zip_file.writestr(nama_file, excel_buffer.getvalue())
 
                         st.success(f"✅ Data berhasil dipisah menjadi {len(nilai_unik)} file Excel terpisah!")
-                        st.download_button(
-                            label="⬇️ Download ZIP (Multiple Files)",
-                            data=zip_buffer.getvalue(),
-                            file_name=f"Data_Split_{kolom_pilihan}_Files.zip",
-                            mime="application/zip",
-                            key="t10_download_zip"
-                        )
-
+                        st.download_button(label="⬇️ Download ZIP (Multiple Files)", data=zip_buffer.getvalue(), file_name=f"Data_Split_{kolom_pilihan}_Files.zip", mime="application/zip", key="t10_download_zip")
         except Exception as e:
             st.error(f"❌ Terjadi kesalahan saat memproses data: {e}")
 
 # ==========================================
-# TAB 11: EKSTRAK PDF LAPORAN FORMAT SESUAI ASLLINYA
+# TAB 11: EKSTRAK PDF LAPORAN FORMAT ASLI (AKURAT)
 # ==========================================
 with tab11:
-    st.header("Tahap 11: Ekstrak PDF Laporan Sesuai Aslinya")
-    st.markdown("Untuk menconver pdf ke excel sesuai aslinya")
-    
+    st.header("Tahap 11: Ekstrak PDF Laporan Sesuai Asli (Akurat)")
+    st.markdown("Menggunakan mesin Hybrid (seperti Tab 3) yang sudah terbukti berhasil membaca garis laporan, tetapi fitur ini **mempertahankan seluruh kolom asli (16 kolom)** tanpa memfilter datanya.")
     pdf_files_t11 = st.file_uploader("Upload File PDF Laporan (Tab 11)", type=['pdf'], accept_multiple_files=True, key="t11_pdf")
 
     if st.button("Proses & Ekstrak Laporan (Akurat)", type="primary"):
-        if not pdf_files_t11: 
-            st.error("Silakan unggah setidaknya satu file PDF.")
-        elif not PDF_SUPPORT:
-            st.error("Library `pdfplumber` belum terinstall. Pastikan sudah ada di requirements.txt!")
+        if not pdf_files_t11: st.error("Silakan unggah setidaknya satu file PDF.")
+        elif not PDF_SUPPORT: st.error("Library `pdfplumber` belum terinstall. Pastikan sudah ada di requirements.txt!")
         else:
             all_extracted_dfs = []
-            
             with st.spinner("⏳ Mengekstraksi tabel dengan mesin Hybrid..."):
                 progress_bar = st.progress(0)
                 status_text = st.empty()
                 total_files = len(pdf_files_t11)
-                
                 for f_idx, uploaded_pdf in enumerate(pdf_files_t11):
                     fname = uploaded_pdf.name
-                    
                     with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp: 
                         tmp.write(uploaded_pdf.getvalue())
                         tmp_path = tmp.name
-                        
                     try:
                         with pdfplumber.open(tmp_path) as pdf:
                             total_hal = len(pdf.pages)
                             for i, page in enumerate(pdf.pages):
                                 tables = get_pdf_tables_tipe1(page)
-                                
                                 for table in tables:
                                     df_hybrid = process_hybrid_table(table)
-                                    
                                     if df_hybrid is not None and not df_hybrid.empty: 
                                         all_extracted_dfs.append(df_hybrid)
-                                        
                                 page.flush_cache()
                                 current_progress = (f_idx + ((i + 1) / max(1, total_hal))) / total_files
                                 progress_bar.progress(min(1.0, current_progress))
                                 status_text.text(f"⚡ File {f_idx+1}/{total_files} ({fname}): Halaman {i+1}/{total_hal} diproses...")
-
                     except Exception as e:
                         st.error(f"Gagal memproses file {fname}: {str(e)}")
                     finally:
-                        if os.path.exists(tmp_path): 
-                            os.remove(tmp_path)
-                            
+                        if os.path.exists(tmp_path): os.remove(tmp_path)
                 gc.collect()
 
             if all_extracted_dfs:
                 status_text.empty()
                 progress_bar.progress(1.0)
-                
                 df_final = pd.concat(all_extracted_dfs, ignore_index=True)
                 
                 unique_headers = []
                 dilihat = {}
                 for idx, col in enumerate(df_final.columns):
                     col_bersih = str(col).replace('\n', ' ').strip()
-                    if not col_bersih:
-                        col_bersih = f"Kolom_Kosong_{idx+1}"
-                        
+                    if not col_bersih: col_bersih = f"Kolom_Kosong_{idx+1}"
                     if col_bersih in dilihat:
                         dilihat[col_bersih] += 1
                         unique_headers.append(f"{col_bersih}_{dilihat[col_bersih]}")
@@ -1865,15 +1611,7 @@ with tab11:
                 
                 st.success(f"🎉 Selesai! Berhasil mengekstraksi {len(df_final)} baris data format tabel asli!")
                 st.dataframe(df_final.head(50), use_container_width=True)
-                
-                st.download_button(
-                    "📥 Download Excel Laporan (.xlsx)", 
-                    data=to_excel_bytes(df_final), 
-                    file_name="Hasil_Ekstrak_Laporan_Akurat.xlsx", 
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", 
-                    type="primary",
-                    key="dl_tab11"
-                )
+                st.download_button("📥 Download Excel Laporan (.xlsx)", data=to_excel_bytes(df_final), file_name="Hasil_Ekstrak_Laporan_Akurat.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", type="primary", key="dl_tab11")
             else:
                 st.warning("⚠️ Tidak ada data tabel yang terdeteksi dengan format tersebut.")
 
@@ -1885,30 +1623,10 @@ with tab12:
     st.markdown("Digunakan untuk mencetak Pemberitahuan Pelaksanaan Pemutusan Sementara Sambungan Tenaga Listrik ke format `.iconprn` yang siap dikirim ke printer Dot Matrix.")
     
     col_t12_1, col_t12_2 = st.columns([1, 2])
-    
     with col_t12_1:
         st.subheader("🖨️ Pengaturan Cetak")
-        mode_cetak = st.radio(
-            "Pilih Tahap Pencetakan:",
-            [
-                "Tahap 2: Isi Blangko Saja",
-                "Tahap 1 & 2 Sekaligus",
-                "Tahap 1 Saja: Cetak Blangko Kosong"
-            ],
-            index=0,
-            key="t12_mode"
-        )
-
-        tipe_printer = st.selectbox(
-            "Pilih Printer yang Digunakan:",
-            [
-                "Epson LQ-2190 (Standar Blangko 15 CPI - ESC g)",
-                "Epson LX-310 / LX-300+II (9-Pin Condensed 17 CPI)",
-                "Epson LX-310 / LX-300+II (9-Pin Elite 12 CPI)"
-            ],
-            help="Jika memakai kertas blangko lama, SELALU pilih opsi LQ-2190.",
-            key="t12_printer"
-        )
+        mode_cetak = st.radio("Pilih Tahap Pencetakan:", ["Tahap 2: Isi Blangko Saja", "Tahap 1 & 2 Sekaligus", "Tahap 1 Saja: Cetak Blangko Kosong"], index=0, key="t12_mode")
+        tipe_printer = st.selectbox("Pilih Printer yang Digunakan:", ["Epson LQ-2190 (Standar Blangko 15 CPI - ESC g)", "Epson LX-310 / LX-300+II (9-Pin Condensed 17 CPI)", "Epson LX-310 / LX-300+II (9-Pin Elite 12 CPI)"], help="Jika memakai kertas blangko lama, SELALU pilih opsi LQ-2190.", key="t12_printer")
         
         with st.expander("📐 Kalibrasi Posisi Kertas (Global)"):
             geser_kanan = st.number_input("Geser Kanan/Kiri Semua Teks (Spasi):", min_value=-15, max_value=30, value=0, key="t12_kanan")
@@ -1930,20 +1648,9 @@ with tab12:
             st.subheader("📄 Cetak Blangko Kosong (.iconprn)")
             jml = st.number_input("Jumlah Lembar Blangko:", min_value=1, max_value=1000, value=50, key="t12_jml_blangko")
             raw_blanko = buat_blangko_kosong(init_esc, jml, tinggi_halaman)
-            st.download_button(
-                label=f"🖨️ Download BLANKO_{jml}_LEMBAR.iconprn",
-                data=raw_blanko.encode("latin1", errors="replace"),
-                file_name=f"BLANKO_{jml}_LEMBAR.iconprn",
-                mime="application/octet-stream",
-                key="t12_dl_blangko"
-            )
+            st.download_button(label=f"🖨️ Download BLANKO_{jml}_LEMBAR.iconprn", data=raw_blanko.encode("latin1", errors="replace"), file_name=f"BLANKO_{jml}_LEMBAR.iconprn", mime="application/octet-stream", key="t12_dl_blangko")
         else:
-            uploaded_files_t12 = st.file_uploader(
-                "📂 Upload File Data (.xlsx, .xls, .iconprn, atau .zip)", 
-                type=["xlsx", "xls", "iconprn", "prn", "zip"], 
-                accept_multiple_files=True,
-                key="t12_uploads"
-            )
+            uploaded_files_t12 = st.file_uploader("📂 Upload File Data (.xlsx, .xls, .iconprn, atau .zip)", type=["xlsx", "xls", "iconprn", "prn", "zip"], accept_multiple_files=True, key="t12_uploads")
 
             if uploaded_files_t12:
                 df_t12 = None
@@ -1954,8 +1661,7 @@ with tab12:
                 with st.spinner("Memproses file masukan..."):
                     for uploaded_file in uploaded_files_t12:
                         nama_file = uploaded_file.name.lower()
-                        if nama_file.endswith(('.xlsx', '.xls')):
-                            excel_uploaded = True
+                        if nama_file.endswith(('.xlsx', '.xls')): excel_uploaded = True
                         elif nama_file.endswith('.zip'):
                             with zipfile.ZipFile(uploaded_file, 'r') as z:
                                 for z_name in z.namelist():
@@ -1970,17 +1676,14 @@ with tab12:
                     file_excel = next(f for f in uploaded_files_t12 if f.name.lower().endswith(('.xlsx', '.xls')))
                     xls = pd.ExcelFile(file_excel)
                     pilih_sheet = st.selectbox("Pilih Sheet Excel:", xls.sheet_names, key="t12_sheet") if len(xls.sheet_names) > 1 else xls.sheet_names[0]
-                    
                     df_excel = pd.read_excel(file_excel, sheet_name=pilih_sheet, dtype=str)
                     
                     auto_map = deteksi_kolom_otomatis(df_excel.columns.tolist())
                     kolom_hilang = [k for k, v in auto_map.items() if v is None]
 
                     with st.expander("🔗 Pengaturan Pencocokan Kolom Excel", expanded=len(kolom_hilang) > 0):
-                        if kolom_hilang:
-                            st.warning(f"⚠️ Ada nama kolom yang berbeda: **{', '.join(kolom_hilang)}**. Silakan pilih manual:")
-                        else:
-                            st.success("✅ Semua kolom Excel otomatis dikenali!")
+                        if kolom_hilang: st.warning(f"⚠️ Ada nama kolom yang berbeda: **{', '.join(kolom_hilang)}**. Silakan pilih manual:")
+                        else: st.success("✅ Semua kolom Excel otomatis dikenali!")
 
                         opsi_kolom = ["(Kosongkan)"] + df_excel.columns.tolist()
                         col_map_final = {}
@@ -1993,8 +1696,7 @@ with tab12:
                     df_t12 = df_excel
 
                 else:
-                    if semua_data_iconprn:
-                        df_t12 = pd.DataFrame(semua_data_iconprn)
+                    if semua_data_iconprn: df_t12 = pd.DataFrame(semua_data_iconprn)
                         
                 if df_t12 is not None and len(df_t12) > 0:
                     st.success(f"✅ Berhasil memuat {len(df_t12)} tagihan pelanggan!")
@@ -2014,16 +1716,11 @@ with tab12:
                         df_saring = df_t12.reset_index(drop=True)
 
                     total_data = len(df_saring)
-                    
-                    # --- PERBAIKAN: Kunci ID Dinamis ---
-                    # Membuat kunci dinamis berdasarkan petugas terpilih dan jumlah data
                     dynamic_key = f"{'_'.join(ptg_terpilih)}_{total_data}"
                     
                     c2, c3 = st.columns(2)
-                    with c2:
-                        urut_awal = st.number_input("Mulai Urutan ke-:", min_value=1, max_value=max(1, total_data), value=1, key=f"t12_awal_{dynamic_key}")
-                    with c3:
-                        urut_akhir = st.number_input("Sampai Urutan ke-:", min_value=1, max_value=max(1, total_data), value=max(1, total_data), key=f"t12_akhir_{dynamic_key}")
+                    with c2: urut_awal = st.number_input("Mulai Urutan ke-:", min_value=1, max_value=max(1, total_data), value=1, key=f"t12_awal_{dynamic_key}")
+                    with c3: urut_akhir = st.number_input("Sampai Urutan ke-:", min_value=1, max_value=max(1, total_data), value=max(1, total_data), key=f"t12_akhir_{dynamic_key}")
 
                     df_cetak = df_saring.iloc[urut_awal - 1 : urut_akhir]
                     st.info(f"Siap mencetak **{len(df_cetak)} lembar** (Petugas: **{', '.join(ptg_terpilih)}**, Urutan {urut_awal} s/d {urut_akhir}).")
@@ -2032,10 +1729,8 @@ with tab12:
                     if len(df_cetak) > 0:
                         hasil_iconprn = ""
                         for _, baris in df_cetak.iterrows():
-                            if "Tahap 2" in mode_cetak:
-                                hasil_iconprn += buat_isian_blangko(baris, col_map_final, init_esc, kota_cetak, tgl_cetak, jabatan, nama_manager, cetak_kota_jabatan, geser_tgl, geser_kanan, geser_bawah, tinggi_halaman)
-                            else:
-                                hasil_iconprn += buat_blangko_dan_isi(baris, col_map_final, init_esc, kota_cetak, tgl_cetak, jabatan, nama_manager, tinggi_halaman)
+                            if "Tahap 2" in mode_cetak: hasil_iconprn += buat_isian_blangko(baris, col_map_final, init_esc, kota_cetak, tgl_cetak, jabatan, nama_manager, cetak_kota_jabatan, geser_tgl, geser_kanan, geser_bawah, tinggi_halaman)
+                            else: hasil_iconprn += buat_blangko_dan_isi(baris, col_map_final, init_esc, kota_cetak, tgl_cetak, jabatan, nama_manager, tinggi_halaman)
 
                         nama_ptg_file = "_".join(ptg_terpilih)
                         
@@ -2050,7 +1745,6 @@ with tab12:
                                 use_container_width=True,
                                 key=f"t12_dl_cetak_{dynamic_key}"
                             )
-                        
                         with b2:
                             if kol_petugas and kol_petugas in df_t12.columns:
                                 buf = io.BytesIO()
@@ -2058,10 +1752,8 @@ with tab12:
                                     for kode_p, grp in df_cetak.groupby(kol_petugas):
                                         teks_p = ""
                                         for _, r in grp.iterrows():
-                                            if "Tahap 2" in mode_cetak:
-                                                teks_p += buat_isian_blangko(r, col_map_final, init_esc, kota_cetak, tgl_cetak, jabatan, nama_manager, cetak_kota_jabatan, geser_tgl, geser_kanan, geser_bawah, tinggi_halaman)
-                                            else:
-                                                teks_p += buat_blangko_dan_isi(r, col_map_final, init_esc, kota_cetak, tgl_cetak, jabatan, nama_manager, tinggi_halaman)
+                                            if "Tahap 2" in mode_cetak: teks_p += buat_isian_blangko(r, col_map_final, init_esc, kota_cetak, tgl_cetak, jabatan, nama_manager, cetak_kota_jabatan, geser_tgl, geser_kanan, geser_bawah, tinggi_halaman)
+                                            else: teks_p += buat_blangko_dan_isi(r, col_map_final, init_esc, kota_cetak, tgl_cetak, jabatan, nama_manager, tinggi_halaman)
                                         zf.writestr(f"PETUGAS_{kode_p}_{len(grp)}lembar.iconprn", teks_p.encode("latin1", errors="replace"))
                                 
                                 st.download_button(
