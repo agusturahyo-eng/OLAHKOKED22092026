@@ -1961,151 +1961,16 @@ with tab12:
                                 for z_name in z.namelist():
                                     if z_name.lower().endswith(('.iconprn', '.prn', '.txt')):
                                         teks_mentah = z.read(z_name).decode('latin1', errors='ignore')
-                                        
-                                        # FUNGSI PARSING DILOKALKAN DI SINI AGAR TIDAK BENTROK
-                                        blok_halaman = re.split(r'PEMBERITAHUAN PELAKSANAAN PEMUTUSAN', teks_mentah)
-                                        for blok in blok_halaman:
-                                            if "ID. Pelanggan" not in blok: continue
-                                            
-                                            data = {
-                                                'IDPEL': "", 'Nomor TUL': "", 'Nama': "", 'KDDK': "", 'Gardu/Tiang': "", 
-                                                'Loket': "", 'Alamat': "", 'Nomor Meter': "", 'Tarif/Daya': "", 'Kelompok': "", 
-                                                'Bulan Rekening': "", 'Bulan Keterlambatan': "", 'Jumlah Rekening': 0, 
-                                                'Jumlah Denda': 0, 'Jumlah Tunggakan': 0, 'petugas': ""
-                                            }
-                                            
-                                            idpel = re.search(r'ID\. Pelanggan\s*:\s*[^0-9]*(\d{11,13})', blok)
-                                            if idpel: data['IDPEL'] = str(idpel.group(1).strip())
-
-                                            tul = re.search(r'NO\. TUL\s*:\s*([A-Z0-9/\-]+)', blok)
-                                            if tul: data['Nomor TUL'] = tul.group(1).strip()
-
-                                            nama = re.search(r'Nama\s*:\s*(.+)', blok)
-                                            if nama: data['Nama'] = nama.group(1).strip()
-
-                                            kddk = re.search(r'Kode Kedudukan\s*:\s*([A-Z0-9]+)', blok)
-                                            if kddk: data['KDDK'] = kddk.group(1).strip()
-
-                                            gardu = re.search(r'Gardu\s*/?\s*Tiang\s*:\s*(.*?)(?=\s{2,}|\s+Loket\s*:|\n|\r|$)', blok, re.IGNORECASE)
-                                            if gardu: data['Gardu/Tiang'] = gardu.group(1).strip()
-
-                                            loket = re.search(r'Loket\s*:\s*(.*?)(?=\s{2,}|\s+Tarip|\s+Tarif|\s+Alamat|\s+Kelompok|\n|\r|$)', blok, re.IGNORECASE)
-                                            if loket: 
-                                                val_loket = loket.group(1).strip()
-                                                if "Tarip" in val_loket or "Kelompok" in val_loket or "Daya" in val_loket: val_loket = ""
-                                                data['Loket'] = val_loket
-
-                                            alamat = re.search(r'Alamat\s*:\s*(.+)', blok)
-                                            if alamat: data['Alamat'] = alamat.group(1).strip()
-
-                                            # PERBAIKAN: Nomor Meter mendukung huruf dan tidak membuang nol
-                                            meter = re.search(r'Nomor Meter\s*:\s*([A-Z0-9]+)', blok, re.IGNORECASE)
-                                            if meter: data['Nomor Meter'] = str(meter.group(1).strip())
-
-                                            tarif_match = re.search(r'Tarip / Daya\s*:\s*(.+?)\s+Kelompok\s*:\s*([^\n]+)', blok)
-                                            if tarif_match:
-                                                data['Tarif/Daya'] = tarif_match.group(1).strip()
-                                                data['Kelompok'] = tarif_match.group(2).strip()
-                                            else:
-                                                tarif = re.search(r'Tarip / Daya\s*:\s*([A-Z0-9/ ]+)', blok)
-                                                if tarif: data['Tarif/Daya'] = tarif.group(1).strip()
-                                                data['Kelompok'] = "1"
-
-                                            rek = re.search(r'Rekening\s*:\s*(.+?)\s*Rp\.\s*:\s*[^0-9]*([\d,]+)', blok)
-                                            if rek:
-                                                data['Bulan Rekening'] = rek.group(1).strip()
-                                                val_rek = rek.group(2).replace(',', '').replace('.', '').strip()
-                                                data['Jumlah Rekening'] = int(val_rek) if val_rek.isdigit() else 0
-
-                                            denda = re.search(r'Jumlah Biaya Keterlambatan s\.d bulan\s*:\s*(.+?)\s*Rp\.\s*:\s*[^0-9]*([\d,]+)', blok)
-                                            if denda:
-                                                data['Bulan Keterlambatan'] = denda.group(1).strip()
-                                                val_denda = denda.group(2).replace(',', '').replace('.', '').strip()
-                                                data['Jumlah Denda'] = int(val_denda) if val_denda.isdigit() else 0
-
-                                            tunggakan = re.search(r'Jumlah Tunggakan.*?Rp\.\s*:\s*[^0-9]*([\d,]+)', blok)
-                                            if tunggakan:
-                                                val_tung = tunggakan.group(1).replace(',', '').replace('.', '').strip()
-                                                data['Jumlah Tunggakan'] = int(val_tung) if val_tung.isdigit() else 0
-
-                                            data['petugas'] = tentukan_petugas_tul(data['IDPEL'], data['Tarif/Daya'], data['KDDK'])
-                                            semua_data_iconprn.append(data)
+                                        semua_data_iconprn.extend(baca_data_dari_iconprn_tul(teks_mentah))
                         else:
                             teks_mentah = uploaded_file.getvalue().decode('latin1', errors='ignore')
-                            blok_halaman = re.split(r'PEMBERITAHUAN PELAKSANAAN PEMUTUSAN', teks_mentah)
-                            for blok in blok_halaman:
-                                if "ID. Pelanggan" not in blok: continue
-                                
-                                data = {
-                                    'IDPEL': "", 'Nomor TUL': "", 'Nama': "", 'KDDK': "", 'Gardu/Tiang': "", 
-                                    'Loket': "", 'Alamat': "", 'Nomor Meter': "", 'Tarif/Daya': "", 'Kelompok': "", 
-                                    'Bulan Rekening': "", 'Bulan Keterlambatan': "", 'Jumlah Rekening': 0, 
-                                    'Jumlah Denda': 0, 'Jumlah Tunggakan': 0, 'petugas': ""
-                                }
-                                
-                                idpel = re.search(r'ID\. Pelanggan\s*:\s*[^0-9]*(\d{11,13})', blok)
-                                if idpel: data['IDPEL'] = str(idpel.group(1).strip())
-
-                                tul = re.search(r'NO\. TUL\s*:\s*([A-Z0-9/\-]+)', blok)
-                                if tul: data['Nomor TUL'] = tul.group(1).strip()
-
-                                nama = re.search(r'Nama\s*:\s*(.+)', blok)
-                                if nama: data['Nama'] = nama.group(1).strip()
-
-                                kddk = re.search(r'Kode Kedudukan\s*:\s*([A-Z0-9]+)', blok)
-                                if kddk: data['KDDK'] = kddk.group(1).strip()
-
-                                gardu = re.search(r'Gardu\s*/?\s*Tiang\s*:\s*(.*?)(?=\s{2,}|\s+Loket\s*:|\n|\r|$)', blok, re.IGNORECASE)
-                                if gardu: data['Gardu/Tiang'] = gardu.group(1).strip()
-
-                                loket = re.search(r'Loket\s*:\s*(.*?)(?=\s{2,}|\s+Tarip|\s+Tarif|\s+Alamat|\s+Kelompok|\n|\r|$)', blok, re.IGNORECASE)
-                                if loket: 
-                                    val_loket = loket.group(1).strip()
-                                    if "Tarip" in val_loket or "Kelompok" in val_loket or "Daya" in val_loket: val_loket = ""
-                                    data['Loket'] = val_loket
-
-                                alamat = re.search(r'Alamat\s*:\s*(.+)', blok)
-                                if alamat: data['Alamat'] = alamat.group(1).strip()
-
-                                # PERBAIKAN: Nomor Meter mendukung huruf dan tidak membuang nol
-                                meter = re.search(r'Nomor Meter\s*:\s*([A-Z0-9]+)', blok, re.IGNORECASE)
-                                if meter: data['Nomor Meter'] = str(meter.group(1).strip())
-
-                                tarif_match = re.search(r'Tarip / Daya\s*:\s*(.+?)\s+Kelompok\s*:\s*([^\n]+)', blok)
-                                if tarif_match:
-                                    data['Tarif/Daya'] = tarif_match.group(1).strip()
-                                    data['Kelompok'] = tarif_match.group(2).strip()
-                                else:
-                                    tarif = re.search(r'Tarip / Daya\s*:\s*([A-Z0-9/ ]+)', blok)
-                                    if tarif: data['Tarif/Daya'] = tarif.group(1).strip()
-                                    data['Kelompok'] = "1"
-
-                                rek = re.search(r'Rekening\s*:\s*(.+?)\s*Rp\.\s*:\s*[^0-9]*([\d,]+)', blok)
-                                if rek:
-                                    data['Bulan Rekening'] = rek.group(1).strip()
-                                    val_rek = rek.group(2).replace(',', '').replace('.', '').strip()
-                                    data['Jumlah Rekening'] = int(val_rek) if val_rek.isdigit() else 0
-
-                                denda = re.search(r'Jumlah Biaya Keterlambatan s\.d bulan\s*:\s*(.+?)\s*Rp\.\s*:\s*[^0-9]*([\d,]+)', blok)
-                                if denda:
-                                    data['Bulan Keterlambatan'] = denda.group(1).strip()
-                                    val_denda = denda.group(2).replace(',', '').replace('.', '').strip()
-                                    data['Jumlah Denda'] = int(val_denda) if val_denda.isdigit() else 0
-
-                                tunggakan = re.search(r'Jumlah Tunggakan.*?Rp\.\s*:\s*[^0-9]*([\d,]+)', blok)
-                                if tunggakan:
-                                    val_tung = tunggakan.group(1).replace(',', '').replace('.', '').strip()
-                                    data['Jumlah Tunggakan'] = int(val_tung) if val_tung.isdigit() else 0
-
-                                data['petugas'] = tentukan_petugas_tul(data['IDPEL'], data['Tarif/Daya'], data['KDDK'])
-                                semua_data_iconprn.append(data)
+                            semua_data_iconprn.extend(baca_data_dari_iconprn_tul(teks_mentah))
                             
                 if excel_uploaded:
                     file_excel = next(f for f in uploaded_files_t12 if f.name.lower().endswith(('.xlsx', '.xls')))
                     xls = pd.ExcelFile(file_excel)
                     pilih_sheet = st.selectbox("Pilih Sheet Excel:", xls.sheet_names, key="t12_sheet") if len(xls.sheet_names) > 1 else xls.sheet_names[0]
                     
-                    # PERBAIKAN: Baca Excel dan pastikan kolom nomor meter dibaca sebagai text (dtype=str) agar 0 tidak hilang
                     df_excel = pd.read_excel(file_excel, sheet_name=pilih_sheet, dtype=str)
                     
                     auto_map = deteksi_kolom_otomatis(df_excel.columns.tolist())
@@ -2149,11 +2014,16 @@ with tab12:
                         df_saring = df_t12.reset_index(drop=True)
 
                     total_data = len(df_saring)
+                    
+                    # --- PERBAIKAN: Kunci ID Dinamis ---
+                    # Membuat kunci dinamis berdasarkan petugas terpilih dan jumlah data
+                    dynamic_key = f"{'_'.join(ptg_terpilih)}_{total_data}"
+                    
                     c2, c3 = st.columns(2)
                     with c2:
-                        urut_awal = st.number_input("Mulai Urutan ke-:", min_value=1, max_value=max(1, total_data), value=1, key="t12_urut_awal")
+                        urut_awal = st.number_input("Mulai Urutan ke-:", min_value=1, max_value=max(1, total_data), value=1, key=f"t12_awal_{dynamic_key}")
                     with c3:
-                        urut_akhir = st.number_input("Sampai Urutan ke-:", min_value=1, max_value=max(1, total_data), value=max(1, total_data), key="t12_urut_akhir")
+                        urut_akhir = st.number_input("Sampai Urutan ke-:", min_value=1, max_value=max(1, total_data), value=max(1, total_data), key=f"t12_akhir_{dynamic_key}")
 
                     df_cetak = df_saring.iloc[urut_awal - 1 : urut_akhir]
                     st.info(f"Siap mencetak **{len(df_cetak)} lembar** (Petugas: **{', '.join(ptg_terpilih)}**, Urutan {urut_awal} s/d {urut_akhir}).")
@@ -2178,7 +2048,7 @@ with tab12:
                                 mime="application/octet-stream",
                                 type="primary",
                                 use_container_width=True,
-                                key="t12_dl_cetak"
+                                key=f"t12_dl_cetak_{dynamic_key}"
                             )
                         
                         with b2:
@@ -2200,5 +2070,5 @@ with tab12:
                                     file_name=f"PAKET_CETAK_{urut_awal}_sd_{urut_akhir}.zip",
                                     mime="application/zip",
                                     use_container_width=True,
-                                    key="t12_dl_zip"
+                                    key=f"t12_dl_zip_{dynamic_key}"
                                 )
