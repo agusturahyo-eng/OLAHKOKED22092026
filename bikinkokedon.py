@@ -1518,7 +1518,7 @@ with tab10:
 # ==========================================
 with tab11:
     st.header("Tahap 11: Ekstrak PDF Laporan Sesuai Asli (Akurat)")
-    st.markdown("Gunakan tab ini **khusus untuk PDF Laporan berbentuk tabel utuh** (seperti Laporan Pembayaran/Perubahan Daya). Proses sedikit lebih lama, namun sistem akan menyatukan teks yang terputus (enter) di dalam satu baris sel.")
+    st.markdown("Menggunakan mesin Hybrid (seperti Tab 3) yang sudah terbukti berhasil membaca garis laporan, tetapi fitur ini **mempertahankan seluruh kolom asli (16 kolom)** tanpa memfilter datanya.")
     
     pdf_files_t11 = st.file_uploader("Upload File PDF Laporan (Tab 11)", type=['pdf'], accept_multiple_files=True, key="t11_pdf")
 
@@ -1528,15 +1528,13 @@ with tab11:
         elif not PDF_SUPPORT:
             st.error("Library `pdfplumber` belum terinstall. Pastikan sudah ada di requirements.txt!")
         else:
-            all_extracted_rows = []
-            master_headers = None
+            all_extracted_dfs = []
             
-            with st.spinner("⏳ Mengekstraksi tabel dan menyatukan baris teks..."):
+            with st.spinner("⏳ Mengekstraksi tabel dengan mesin Hybrid..."):
                 progress_bar = st.progress(0)
                 status_text = st.empty()
                 total_files = len(pdf_files_t11)
-                total_baris_ditemukan = 0
-
+                
                 for f_idx, uploaded_pdf in enumerate(pdf_files_t11):
                     fname = uploaded_pdf.name
                     
@@ -1547,80 +1545,22 @@ with tab11:
                     try:
                         with pdfplumber.open(tmp_path) as pdf:
                             total_hal = len(pdf.pages)
-                            
                             for i, page in enumerate(pdf.pages):
-                                # PENGATURAN BARU: Memaksa pembacaan batas garis tegas (lines)
-                                # intersection_y_tolerance dan intersection_x_tolerance dinaikkan
-                                # agar teks yang ada enter-nya tetap dianggap 1 sel
-                                table_settings = {
-                                    "vertical_strategy": "lines",
-                                    "horizontal_strategy": "lines",
-                                    "intersection_y_tolerance": 25, 
-                                    "intersection_x_tolerance": 25
-                                }
+                                # 1. Panggil fungsi deteksi tabel milik Tab 3 yang sudah terbukti jalan
+                                tables = get_pdf_tables_tipe1(page)
                                 
-                                tables = page.extract_tables(table_settings)
-                                if not tables:
-                                    # Fallback jika PDF tidak punya garis nyata
-                                    table_settings["horizontal_strategy"] = "text"
-                                    tables = page.extract_tables(table_settings)
-                                    
                                 for table in tables:
-                                    if not table or len(table) < 2:
-                                        continue
-                                        
-                                    cleaned_table = []
-                                    for row in table:
-                                        # PERBAIKAN: Gabungkan teks ber-enter di dalam SEL YANG SAMA dengan spasi
-                                        cleaned_row = [str(cell).replace('\n', ' ').strip() if cell else "" for cell in row]
-                                        
-                                        # Abaikan baris jika hanya kosong melompong
-                                        if not any(cleaned_row):
-                                            continue
-                                            
-                                        cleaned_table.append(cleaned_row)
-                                            
-                                    if not cleaned_table:
-                                        continue
-                                        
-                                    # Cari header utama di halaman pertama
-                                    if master_headers is None:
-                                        for r_idx, row in enumerate(cleaned_table[:15]):
-                                            row_str = " ".join([c.upper() for c in row])
-                                            # Indikator header
-                                            if "NAMA PEMOHON" in row_str or "NO. AGENDA" in row_str or "IDPEL" in row_str:
-                                                master_headers = row
-                                                # Hapus baris header dari data
-                                                cleaned_table = cleaned_table[r_idx + 1:]
-                                                break
-                                                
-                                        # Jika gagal menemukan header, buat header generik
-                                        if master_headers is None:
-                                            master_headers = [f"Kolom_{x+1}" for x in range(len(cleaned_table[0]))]
-                                            
-                                    # Tambahkan data baris ke list final
-                                    for row in cleaned_table:
-                                        row_str = " ".join([c.upper() for c in row])
-                                        
-                                        # Lewati header yang muncul berulang di tiap halaman (atau sisa header)
-                                        if "NO. AGENDA" in row_str or "NAMA PEMOHON" in row_str or "HALAMAN" in row_str or "TARIF/DAYA" in row_str or "LAMA" in row_str and "BARU" in row_str:
-                                            continue
-                                            
-                                        # Sesuaikan jumlah kolom dengan master header
-                                        if len(row) < len(master_headers):
-                                            row.extend([""] * (len(master_headers) - len(row)))
-                                        elif len(row) > len(master_headers):
-                                            row = row[:len(master_headers)]
-                                            
-                                        # Pastikan baris ini punya isi (bukan sisa-sisa garis kosong)
-                                        if any(row):
-                                            all_extracted_rows.append(row)
-                                            total_baris_ditemukan += 1
+                                    # 2. Panggil fungsi penyatuan baris miring milik Tab 3
+                                    df_hybrid = process_hybrid_table(table)
+                                    
+                                    # 3. Langsung simpan DataFrame-nya tanpa masuk ke normalize_pdf_dataframe
+                                    if df_hybrid is not None and not df_hybrid.empty: 
+                                        all_extracted_dfs.append(df_hybrid)
                                         
                                 page.flush_cache()
                                 current_progress = (f_idx + ((i + 1) / max(1, total_hal))) / total_files
                                 progress_bar.progress(min(1.0, current_progress))
-                                status_text.text(f"⚡ File {f_idx+1}/{total_files} ({fname}): Halaman {i+1}/{total_hal} (Terkumpul: {total_baris_ditemukan} baris)...")
+                                status_text.text(f"⚡ File {f_idx+1}/{total_files} ({fname}): Halaman {i+1}/{total_hal} diproses...")
 
                     except Exception as e:
                         st.error(f"Gagal memproses file {fname}: {str(e)}")
@@ -1630,15 +1570,17 @@ with tab11:
                             
                 gc.collect()
 
-            if all_extracted_rows and master_headers:
+            if all_extracted_dfs:
                 status_text.empty()
                 progress_bar.progress(1.0)
+                
+                # Menggabungkan semua halaman menjadi 1 Excel
+                df_final = pd.concat(all_extracted_dfs, ignore_index=True)
                 
                 # JADIKAN NAMA KOLOM UNIK MENCEGAH ERROR PYARROW
                 unique_headers = []
                 dilihat = {}
-                for idx, col in enumerate(master_headers):
-                    # Bersihkan enter di header (misal "Tarif/Daya\nLama" menjadi "Tarif/Daya Lama")
+                for idx, col in enumerate(df_final.columns):
                     col_bersih = str(col).replace('\n', ' ').strip()
                     if not col_bersih:
                         col_bersih = f"Kolom_Kosong_{idx+1}"
@@ -1650,16 +1592,12 @@ with tab11:
                         dilihat[col_bersih] = 0
                         unique_headers.append(col_bersih)
                 
-                df_final = pd.DataFrame(all_extracted_rows, columns=unique_headers)
+                df_final.columns = unique_headers
                 
-                # Bersihkan DataFrame dari baris kosong
+                # Bersihkan DataFrame dari baris yang isinya kosong semua
                 df_final = df_final.replace(r'^\s*$', np.nan, regex=True).dropna(how='all')
                 df_final = df_final.fillna("")
                 
-                # Opsional: Filter tambahan untuk membuang baris yang No. Urut atau No. Agenda-nya kosong (berarti itu bukan data utama)
-                # Jika ingin baris "sisa enter" ikut terbuang, aktifkan baris di bawah:
-                # if unique_headers: df_final = df_final[df_final[unique_headers[0]] != ""]
-
                 st.success(f"🎉 Selesai! Berhasil mengekstraksi {len(df_final)} baris data format tabel asli!")
                 st.dataframe(df_final.head(50), use_container_width=True)
                 
