@@ -721,8 +721,8 @@ st.title("⚡ Aplikasi Olah Data & Cetak TUL")
 tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12 = st.tabs([
     "1️⃣ 1: Bikin Data Untuk Koked", 
     "2️⃣ 2: Hasil Koked",
-    "3️⃣ 3: Eksport Pdf PB",
-    "4️⃣ 4: Eksport PDF",
+    "3️⃣ 3: Eksport PDFPB",
+    "4️⃣ 4: Eksport PDF CEPAT",
     "5️⃣ 5: eksport ICONPRN",
     "6️⃣ 6: Olah Data",
     "7️⃣ 7: Info & Lokasi",
@@ -737,8 +737,8 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12 = st.t
 # TAB 1: PERSIAPAN DATA
 # ==========================================
 with tab1:
-    st.header("Tahap 1: Memecah Data Untuk Petugas Lapangan")
-    st.markdown("Digunakan untuk membuat data perpetugas buat koked, data pelanggan baru, dan data master")
+    st.header("Tahap 1: Memecah Data Untuk Cater")
+    st.markdown("Untuk membuat data perpetugas buat koked, data pelanggan baru, dan data master")
     tampilkan_info_header_master()
     
     col1, col2 = st.columns(2)
@@ -864,7 +864,7 @@ with tab1:
 # ==========================================
 with tab2:
     st.header("Tahap 2: Gabung File Petugas & Mutasi KOKED")
-    st.markdown("Digunakan untuk membuat hasil koked untuk di upload di PLN")
+    st.markdown("Untuk membuat hasil koked untuk di upload di PLN")
     tampilkan_info_header_master()
     
     col3, col4 = st.columns(2)
@@ -929,11 +929,11 @@ with tab2:
                     st.error(f"❌ Error Tahap 2: {str(e)}")
 
 # ==========================================
-# TAB 3: IMPORT & EKSTRAK PDF (TIPE 1)
+# TAB 3: IMPORT & EKSTRAK PDF PB
 # ==========================================
 with tab3:
-    st.header("Tahap 3: Import & Ekstrak PDF (Tipe 1)")
-    st.markdown("Digunakan untuk file yang terpotong barisnya. **Data di-filter ke 8 Kolom Standar.**")
+    st.header("Tahap 3: Import & Ekstrak PDF PB")
+    st.markdown("Untuk file yang terpotong barisnya. **Data di-filter ke 8 Kolom Standar.**")
     pdf_files_t1 = st.file_uploader("Upload File PDF Tipe 1", type=['pdf'], accept_multiple_files=True, key="t3_pdf")
 
     if st.button("Proses & Ekstrak PDF (Tipe 1)", type="primary"):
@@ -967,11 +967,11 @@ with tab3:
                 st.warning("⚠️ Tidak ada data tabel yang terdeteksi.")
 
 # ==========================================
-# TAB 4: IMPORT & EKSTRAK PDF (TIPE 2 - TURBO & RAPIH SESUAI ASLI)
+# TAB 4: IMPORT & EKSTRAK PDF (CEPAT)
 # ==========================================
 with tab4:
-    st.header("Tahap 4: Ekstrak PDF Tipe 2 (Turbo & Format Utuh)")
-    st.markdown("Menggunakan mesin **Turbo (PyMuPDF)** yang sangat cepat, namun telah dioptimalkan agar membaca **tabel secara utuh sesuai aslinya (16+ Kolom)** tanpa memotong atau menggabungkan data.")
+    st.header("Tahap 4: Ekstrak PDF 2 (Cepat)")
+    st.markdown("Untuk Convert Pdf secara Cepat.")
     pdf_files_t4 = st.file_uploader("Upload File PDF Laporan", type=['pdf'], accept_multiple_files=True, key="t4_pdf")
 
     if st.button("🚀 Proses & Ekstrak Data (Tab 4)", type="primary"):
@@ -983,7 +983,7 @@ with tab4:
             all_extracted_rows = []
             master_headers = None
             
-            with st.spinner("🚀 Mengekstraksi PDF dengan Mode Turbo Cepat & Rapih..."):
+            with st.spinner("🚀 Mengekstraksi PDF dengan Mode Cepat..."):
                 progress_bar = st.progress(0)
                 status_text = st.empty()
                 total_files = len(pdf_files_t4)
@@ -1110,7 +1110,7 @@ with tab4:
 # ==========================================
 with tab5:
     st.header("Tahap 5: Rekap Data ICONPRN")
-    st.markdown("Ekstraksi file teks `.iconprn` menjadi file Excel tagihan gabungan secara otomatis.")
+    st.markdown("Ekstraksi file teks `.iconprn` menjadi file Excel tagihan.")
     
     iconprn_files = st.file_uploader("Upload File .iconprn", accept_multiple_files=True, key="t5_iconprn")
     
@@ -1346,7 +1346,7 @@ with tab6:
 # ==========================================
 with tab7:
     st.header("Tahap 7: Info Data & Lokasi Pelanggan")
-    st.markdown("Digunakan untuk mencari data pelanggan berdasar idpel, nama, nomormeter")
+    st.markdown("Untuk mencari data pelanggan berdasar idpel, nama, nomormeter")
     tampilkan_info_header_master()
     
     try:
@@ -1786,11 +1786,11 @@ with tab10:
             st.error(f"❌ Terjadi kesalahan saat memproses data: {e}")
 
 # ==========================================
-# TAB 11: EKSTRAK PDF LAPORAN FORMAT ASLI (AKURAT)
+# TAB 11: EKSTRAK PDF LAPORAN FORMAT SESUAI ASLLINYA
 # ==========================================
 with tab11:
-    st.header("Tahap 11: Ekstrak PDF Laporan Sesuai Asli (Akurat)")
-    st.markdown("Menggunakan mesin Hybrid (seperti Tab 3) yang sudah terbukti berhasil membaca garis laporan, tetapi fitur ini **mempertahankan seluruh kolom asli (16 kolom)** tanpa memfilter datanya.")
+    st.header("Tahap 11: Ekstrak PDF Laporan Sesuai Aslinya")
+    st.markdown("Untuk menconver pdf ke excel sesuai aslinya")
     
     pdf_files_t11 = st.file_uploader("Upload File PDF Laporan (Tab 11)", type=['pdf'], accept_multiple_files=True, key="t11_pdf")
 
@@ -1881,8 +1881,8 @@ with tab11:
 # TAB 12: CETAK TUL VI-01
 # ==========================================
 with tab12:
-    st.header("Tahap 12: Cetak TUL VI-01 (Presisi & Rata Kanan)")
-    st.markdown("Digunakan untuk mencetak Pemberitahuan Pelaksanaan Pemutusan Sementara Sambungan Tenaga Listrik ke format `.iconprn` yang siap dikirim ke printer Dot Matrix.")
+    st.header("Tahap 12: Cetak TUL VI-01")
+    st.markdown("Digunakan untuk mencetak TUL VI-01 menggunakan file iconprn/excel")
     
     col_t12_1, col_t12_2 = st.columns([1, 2])
     
