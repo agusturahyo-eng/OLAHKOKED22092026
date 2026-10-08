@@ -15,7 +15,7 @@ import gc
 import openpyxl
 
 # --- PENGATURAN HALAMAN (WAJIB PALING ATAS DI STREAMLIT) ---
-st.set_page_config(page_title="Aplikasi Olah Data Manbill Tlg", layout="wide")
+st.set_page_config(page_title="Aplikasi Olah Data & Cetak TUL", layout="wide")
 
 # 1. Inisialisasi status login
 if "authenticated" not in st.session_state:
@@ -67,7 +67,7 @@ def init_koneksi():
 
 @st.cache_data(ttl=1800, max_entries=2, show_spinner=False)
 def fetch_master_supabase(columns="*"):
-    """Mengambil seluruh data master dari Server (tabel dataplg3) secara bertahap (pagination)."""
+    """Mengambil seluruh data master dari Supabase (tabel dataplg3) secara bertahap (pagination)."""
     client = init_koneksi()
     all_rows = []
     batch_size = 1000
@@ -108,7 +108,7 @@ def bersihkan_halaman_pdf(page):
     except Exception:
         return page
 
-# --- FUNGSI MEMBERSIHKAN DAYA & IDPEL (100% SAMA DENGAN TKINTER) ---
+# --- FUNGSI MEMBERSIHKAN DAYA & IDPEL ---
 def clean_daya(val):
     if pd.isna(val): return 0.0
     s = str(val).strip()
@@ -194,7 +194,6 @@ def baca_ekstrak_tabel(uploaded_file):
     return df, fname
 
 def siapkan_df_master_standar(df, tipe_data='master'):
-    """Menstandarkan DataFrame dari Supabase agar sesuai dengan struktur kolom Tahap 1 & Tahap 2."""
     if df.empty:
         return pd.DataFrame()
     df = df.copy()
@@ -259,7 +258,7 @@ def proses_list_file(files, tipe_data):
             df['IDPEL'] = df['IDPEL'].apply(clean_idpel)
             list_df.append(df[['IDPEL', 'NAMA', 'ALAMAT']])
 
-        elif tipe_data == 'petugas': # Untuk Tab 2
+        elif tipe_data == 'petugas': 
             for col in ['ALAMAT', 'NAMA', 'TARIP', 'KOKED']:
                 if col not in df.columns: df[col] = ''
             if 'DAYA' not in df.columns: df['DAYA'] = 0
@@ -327,7 +326,6 @@ def process_hybrid_table(table):
     df = pd.DataFrame(merged_rows[header_index+1:], columns=headers)
     return df
 
-# --- FUNGSI NORMALISASI (HANYA DIGUNAKAN DI TAB 3) ---
 def find_target_column(col_name):
     col_clean = re.sub(r'[^A-Z0-9]', '', str(col_name).upper())
     if 'NOPEL' in col_clean or 'IDPEL' in col_clean or 'IDPELANGGAN' in col_clean or col_clean == 'ID' or col_clean == 'IDPEL': return 'IDPEL'
@@ -388,13 +386,339 @@ def normalize_pdf_dataframe(df):
     df = df[df['IDPEL'].astype(str).str.strip() != ''].copy()
     return df[target_cols].reset_index(drop=True)
 
+# ================= FUNGSI UNTUK TAB 12 (CETAK TUL) =================
+def tentukan_petugas_tul(idpel, tarif_daya, kddk):
+    daya = 0
+    match_daya = re.search(r'/(\d+)', str(tarif_daya))
+    if match_daya: daya = int(match_daya.group(1))
+    if daya > 33000: return "PLN"
+    
+    idpel_khusus = {
+        "524051069054": "c28", "524051263717": "c36", "524051265123": "c36", 
+        "524051104194": "c04", "524051000615": "c08", "524050867033": "c08"
+    }
+    if str(idpel) in idpel_khusus: return idpel_khusus[str(idpel)]
+        
+    if len(str(kddk)) >= 6:
+        kode_mid = str(kddk)[3:6].upper()
+        mapping_kddk = {
+            "JCA": "c01", "TAA": "c02", "JCB": "c03", "JCC": "c04", "NCD": "c05",
+            "KBA": "c06", "TAB": "c07", "JCE": "c08", "TAC": "c09", "MBB": "c10",
+            "KAD": "c11", "TAE": "c12", "KCF": "c13", "JCG": "c14", "TAF": "c15",
+            "KAG": "c16", "BBC": "c17", "TAH": "c18", "BCK": "c19", "NCH": "c20",
+            "JBE": "c21", "MBF": "c22", "MBG": "c23", "KBH": "c24", "KBI": "c25",
+            "KAI": "c26", "MCI": "c27", "KBJ": "c28", "JCJ": "c29", "TAJ": "c30",
+            "MBK": "c31", "KBL": "c32", "TAK": "c33", "KAL": "c34", "JCL": "c35",
+            "MBD": "c36", "KCJ": "c29", "NBJ": "c28", "TAI": "c26", "BBD": "c19",
+            "KCG": "c29", "MBM": "c23"
+        }
+        return mapping_kddk.get(kode_mid, "BARU")
+    return "BARU"
+
+def baca_data_dari_iconprn_tul(teks_mentah):
+    hasil = []
+    blok_halaman = re.split(r'PEMBERITAHUAN PELAKSANAAN PEMUTUSAN', teks_mentah)
+    for blok in blok_halaman:
+        if "ID. Pelanggan" not in blok: continue
+        
+        data = {
+            'IDPEL': "", 'Nomor TUL': "", 'Nama': "", 'KDDK': "", 'Gardu/Tiang': "", 
+            'Loket': "", 'Alamat': "", 'Nomor Meter': "", 'Tarif/Daya': "", 'Kelompok': "", 
+            'Bulan Rekening': "", 'Bulan Keterlambatan': "", 'Jumlah Rekening': 0, 
+            'Jumlah Denda': 0, 'Jumlah Tunggakan': 0, 'petugas': ""
+        }
+        
+        idpel = re.search(r'ID\. Pelanggan\s*:\s*[^0-9]*(\d{11,13})', blok)
+        if idpel: data['IDPEL'] = str(idpel.group(1).strip())
+
+        tul = re.search(r'NO\. TUL\s*:\s*([A-Z0-9/\-]+)', blok)
+        if tul: data['Nomor TUL'] = tul.group(1).strip()
+
+        nama = re.search(r'Nama\s*:\s*(.+)', blok)
+        if nama: data['Nama'] = nama.group(1).strip()
+
+        kddk = re.search(r'Kode Kedudukan\s*:\s*([A-Z0-9]+)', blok)
+        if kddk: data['KDDK'] = kddk.group(1).strip()
+
+        gardu = re.search(r'Gardu\s*/?\s*Tiang\s*:\s*(.*?)(?=\s{2,}|\s+Loket\s*:|\n|\r|$)', blok, re.IGNORECASE)
+        if gardu: data['Gardu/Tiang'] = gardu.group(1).strip()
+
+        loket = re.search(r'Loket\s*:\s*(.*?)(?=\s{2,}|\s+Tarip|\s+Tarif|\s+Alamat|\s+Kelompok|\n|\r|$)', blok, re.IGNORECASE)
+        if loket: 
+            val_loket = loket.group(1).strip()
+            if "Tarip" in val_loket or "Kelompok" in val_loket or "Daya" in val_loket: val_loket = ""
+            data['Loket'] = val_loket
+
+        alamat = re.search(r'Alamat\s*:\s*(.+)', blok)
+        if alamat: data['Alamat'] = alamat.group(1).strip()
+
+        meter = re.search(r'Nomor Meter\s*:\s*([A-Z0-9]+)', blok, re.IGNORECASE)
+        if meter: data['Nomor Meter'] = str(meter.group(1).strip())
+
+        tarif_match = re.search(r'Tarip / Daya\s*:\s*(.+?)\s+Kelompok\s*:\s*([^\n]+)', blok)
+        if tarif_match:
+            data['Tarif/Daya'] = tarif_match.group(1).strip()
+            data['Kelompok'] = tarif_match.group(2).strip()
+        else:
+            tarif = re.search(r'Tarip / Daya\s*:\s*([A-Z0-9/ ]+)', blok)
+            if tarif: data['Tarif/Daya'] = tarif.group(1).strip()
+            data['Kelompok'] = "1"
+
+        rek = re.search(r'Rekening\s*:\s*(.+?)\s*Rp\.\s*:\s*[^0-9]*([\d,]+)', blok)
+        if rek:
+            data['Bulan Rekening'] = rek.group(1).strip()
+            val_rek = rek.group(2).replace(',', '').replace('.', '').strip()
+            data['Jumlah Rekening'] = int(val_rek) if val_rek.isdigit() else 0
+
+        denda = re.search(r'Jumlah Biaya Keterlambatan s\.d bulan\s*:\s*(.+?)\s*Rp\.\s*:\s*[^0-9]*([\d,]+)', blok)
+        if denda:
+            data['Bulan Keterlambatan'] = denda.group(1).strip()
+            val_denda = denda.group(2).replace(',', '').replace('.', '').strip()
+            data['Jumlah Denda'] = int(val_denda) if val_denda.isdigit() else 0
+
+        tunggakan = re.search(r'Jumlah Tunggakan.*?Rp\.\s*:\s*[^0-9]*([\d,]+)', blok)
+        if tunggakan:
+            val_tung = tunggakan.group(1).replace(',', '').replace('.', '').strip()
+            data['Jumlah Tunggakan'] = int(val_tung) if val_tung.isdigit() else 0
+
+        data['petugas'] = tentukan_petugas_tul(data['IDPEL'], data['Tarif/Daya'], data['KDDK'])
+        hasil.append(data)
+    return hasil
+
+STANDAR_KOLOM_TUL = {
+    "IDPEL": ["idpel", "id pelanggan", "id_pelanggan", "no pelanggan"],
+    "Nomor TUL": ["nomor tul", "no tul", "no. tul", "nomor_tul"],
+    "Nama": ["nama", "nama pelanggan", "nama_pelanggan"],
+    "KDDK": ["kddk", "kode kedudukan", "kedudukan"],
+    "Gardu/Tiang": ["gardu/tiang", "gardu", "nama gardu/tiang", "gardutiang", "tiang"],
+    "Loket": ["loket", "kode loket"],
+    "Alamat": ["alamat", "alamat pelanggan"],
+    "Nomor Meter": ["nomor meter", "no meter", "nomor_meter", "nomormeter"],
+    "Tarif/Daya": ["tarif/daya", "tarip / daya", "tarifdaya", "tarif", "daya"],
+    "Kelompok": ["kelompok", "klp"],
+    "Bulan Rekening": ["bulan rekening", "bulan_rekening", "rekening", "blth"],
+    "Bulan Keterlambatan": ["bulan keterlambatan", "bulan_keterlambatan", "keterlambatan"],
+    "Jumlah Rekening": ["jumlah rekening", "jumlah_rekening", "jumlah_rekening_", "rp rekening", "tagihan"],
+    "Jumlah Denda": ["jumlah denda", "jumlah_denda", "jumlah_denda_", "denda", "bk", "biaya keterlambatan"],
+    "Jumlah Tunggakan": ["jumlah tunggakan", "jumlah_tunggakan", "jumlah_tunggakan_", "total", "total tunggakan"],
+    "petugas": ["petugas", "kode petugas", "nama petugas", "cater"]
+}
+
+def deteksi_kolom_otomatis(df_cols):
+    mapping = {}
+    cols_lower = {c.strip().lower(): c for c in df_cols}
+    for target, kandidat_list in STANDAR_KOLOM_TUL.items():
+        found = None
+        for k in kandidat_list:
+            if k in cols_lower:
+                found = cols_lower[k]
+                break
+        if not found:
+            for c_low, c_orig in cols_lower.items():
+                if any(k in c_low for k in kandidat_list):
+                    found = c_orig
+                    break
+        mapping[target] = found
+    return mapping
+
+def get_printer_init_code(printer_choice):
+    ESC = "\x1b"
+    if "LQ-2190" in printer_choice: return f"{ESC}g{ESC}0"
+    elif "17 CPI" in printer_choice: return f"{ESC}P\x0f{ESC}0"
+    else: return f"{ESC}M\x12{ESC}0"
+
+def format_rupiah(val):
+    try:
+        if pd.isna(val) or str(val).strip() == "": return "0"
+        bersih = str(val).replace(".", "").replace(",", "").strip()
+        return f"{int(float(bersih)):,}".replace(",", ".")
+    except Exception:
+        return str(val)
+
+def shift_line(text, offset_x):
+    if not text: return ""
+    if offset_x > 0: return (" " * offset_x) + text
+    elif offset_x < 0:
+        leading = len(text) - len(text.lstrip(" "))
+        return text[min(abs(offset_x), leading):]
+    return text
+
+def ambil_nilai(row, col_map, key, default=""):
+    if col_map is None: return str(row.get(key, default)).strip()
+    nama_kolom = col_map.get(key)
+    if nama_kolom and nama_kolom in row and pd.notna(row[nama_kolom]):
+        return str(row[nama_kolom]).strip()
+    return default
+
+def buat_isian_blangko(row, col_map, init_code, kota, tgl, jab, manager, is_cetak_kota, geser_tgl, offset_x=0, offset_y=0, page_lines=44):
+    ESC = "\x1b"
+    BOLD_ON = f"{ESC}E"  
+    BOLD_OFF = f"{ESC}F" 
+
+    no_tul = ambil_nilai(row, col_map, "Nomor TUL")
+    nama = ambil_nilai(row, col_map, "Nama")[:33]
+    idpel = ambil_nilai(row, col_map, "IDPEL")
+    kddk = ambil_nilai(row, col_map, "KDDK")
+    alamat = ambil_nilai(row, col_map, "Alamat")[:50]
+    no_meter = ambil_nilai(row, col_map, "Nomor Meter")
+    gardu = ambil_nilai(row, col_map, "Gardu/Tiang")
+    loket = ambil_nilai(row, col_map, "Loket")
+    tarif = ambil_nilai(row, col_map, "Tarif/Daya")
+    kelompok = ambil_nilai(row, col_map, "Kelompok", "0")
+    bln_rek = ambil_nilai(row, col_map, "Bulan Rekening")
+    bln_lambat = ambil_nilai(row, col_map, "Bulan Keterlambatan")
+
+    rp_rek = format_rupiah(ambil_nilai(row, col_map, "Jumlah Rekening", "0")).rjust(15)
+    rp_denda = format_rupiah(ambil_nilai(row, col_map, "Jumlah Denda", "0")).rjust(15)
+    rp_total = format_rupiah(ambil_nilai(row, col_map, "Jumlah Tunggakan", "0")).rjust(15)
+
+    raw_lines = [""] * page_lines
+
+    def set_line(idx, content):
+        target = idx + offset_y
+        if 0 <= target < page_lines:
+            raw_lines[target] = shift_line(content, offset_x)
+
+    set_line(1,  f"{'':<73}{no_tul}")
+    set_line(7,  f"{'':<21}{nama}")
+    set_line(8,  f"{'':<21}{idpel:<58}{kddk}")         
+    set_line(9,  f"{'':<21}{alamat}")
+    set_line(10, f"{'':<21}{no_meter}")
+    set_line(11, f"{'':<21}{gardu:<53}{loket}")        
+    set_line(12, f"{'':<21}{tarif:<53}{kelompok}")     
+    
+    set_line(14, f"{'':<12}{bln_rek:<62}{rp_rek}")
+    set_line(15, f"{'':<39}{bln_lambat:<35}{rp_denda}")
+    set_line(17, f"{'':<74}{rp_total}")
+    
+    str_kota = f"{kota}, " if is_cetak_kota else ""
+    str_jabatan = jab if is_cetak_kota else ""
+    
+    posisi_tgl = max(0, 64 + geser_tgl)
+    set_line(30, f"{'':<{posisi_tgl}}{str_kota}{tgl}")
+    set_line(31, f"{'':<69}{str_jabatan}")
+    set_line(36, f"{'':<64}{BOLD_ON}{manager}{BOLD_OFF}")
+
+    raw_lines[0] = init_code + raw_lines[0]
+    return "\r\n".join(raw_lines) + "\r\n"
+
+def buat_blangko_dan_isi(row, col_map, init_code, kota, tgl, jab, manager, page_lines=44):
+    ESC = "\x1b"
+    BOLD_ON = f"{ESC}E"
+    BOLD_OFF = f"{ESC}F"
+
+    no_tul = ambil_nilai(row, col_map, "Nomor TUL")
+    nama = ambil_nilai(row, col_map, "Nama")[:33]
+    idpel = ambil_nilai(row, col_map, "IDPEL")
+    kddk = ambil_nilai(row, col_map, "KDDK")
+    alamat = ambil_nilai(row, col_map, "Alamat")[:50]
+    no_meter = ambil_nilai(row, col_map, "Nomor Meter")
+    gardu = ambil_nilai(row, col_map, "Gardu/Tiang")
+    loket = ambil_nilai(row, col_map, "Loket")
+    tarif = ambil_nilai(row, col_map, "Tarif/Daya")
+    kelompok = ambil_nilai(row, col_map, "Kelompok", "0")
+    bln_rek = ambil_nilai(row, col_map, "Bulan Rekening")
+    bln_lambat = ambil_nilai(row, col_map, "Bulan Keterlambatan")
+
+    rp_rek = format_rupiah(ambil_nilai(row, col_map, "Jumlah Rekening", "0")).rjust(15)
+    rp_denda = format_rupiah(ambil_nilai(row, col_map, "Jumlah Denda", "0")).rjust(15)
+    rp_total = format_rupiah(ambil_nilai(row, col_map, "Jumlah Tunggakan", "0")).rjust(15)
+
+    lines = [
+        f"{init_code}PT. PLN (PERSERO) UID JAWA TENGAH DAN DIY",
+        f"UP3 KLATEN                                                    NO. TUL :  {no_tul}",
+        "ULP TULUNG",
+        "",
+        "             PEMBERITAHUAN PELAKSANAAN PEMUTUSAN SEMENTARA SAMBUNGAN TENAGA LISTRIK             ",
+        "             ======================================================================             ",
+        "Kepada Yth. ",
+        f"Nama              :  {nama}",
+        f"ID. Pelanggan     :  {idpel:<42}Kode Kedudukan : {kddk}",
+        f"Alamat            :  {alamat}",
+        f"Nomor Meter       :  {no_meter}",
+        f"Nama Gardu/Tiang  :  {gardu:<44}Loket    : {loket}",
+        f"Tarip / Daya      :  {tarif:<42}Kelompok : {kelompok}",
+        "",
+        f"Rekening :  {bln_rek:<55}Rp. : {rp_rek}",
+        f"Jumlah Biaya Keterlambatan s.d bulan : {bln_lambat:<28}Rp. : {rp_denda}",
+        "                                                                       ---------------",
+        f"Jumlah Tunggakan (belum termasuk biaya Administrasi)               Rp. : {rp_total}",
+        "",
+        "   Dengan ini diberitahukan dengan hormat bahwa pada hari ini aliran listrik di rumah/alamat seperti tersebut diatas   ",
+        "terpaksa diputus untuk sementara karena rekening listrik belum dilunasi pada waktu yang telah ditetapkan.",
+        "Penyambungan kembali akan dilakukan pada setiap hari jam kerja apabila rekening serta biaya keterlambatan dilunasi",
+        "di tempat penerimaan pembayaran rekening listrik, kantor pos, atau bank yang ditunjuk oleh PLN.                       ",
+        "   Apabila dalam jangka waktu 60 hari terhitung sejak dilakukan pemutusan sementara tunggakan belum dilunasi,         ",
+        "maka instalasi milik PLN akan dibongkar, dan penyambungan kembali dapat dilaksanakan setelah Saudara menyelesaikan    ",
+        "Biaya Penyambungan yang diperlakukan sebagai sambungan baru serta tetap diwajibkan membayar tagihan listrik           ",
+        "yang belum dilunasi beserta dendanya.                     ",
+        "",
+        "UNTUK MENGHINDARI RESIKO, MOHON TIDAK TITIP PEMBAYARAN REKENING KEPADA PETUGAS",
+        "",
+        f"                                                                {kota}, {tgl}",
+        f"                                                                     {jab}",
+        "",
+        "|------------------------------------------------------|",
+        "|       PADA WAKTU MELAKUKAN PEMBAYARAN DIMOHON        |",
+        "|         MENUNJUKKAN SURAT PEMBERITAHUAN INI          |",
+        f"|------------------------------------------------------|        {BOLD_ON}{manager}{BOLD_OFF}",
+        "                              TGL  STAND PUTUS  PELANGGAN        ",
+        "",
+        "A5 TUL VI-01/PETUGAS PEMUTUS...... ... ... ... ...........                   ",
+        "ABAIKAN PEMBERITAHUAN INI JIKA SUDAH MEMBAYAR TAGIHAN"
+    ]
+    while len(lines) < page_lines:
+        lines.append("")
+    return "\r\n".join(lines[:page_lines]) + "\r\n"
+
+def buat_blangko_kosong(init_code, jml_lembar=50, page_lines=44):
+    lines = [
+        f"{init_code}PT. PLN (PERSERO) UID JAWA TENGAH DAN DIY",
+        "UP3 KLATEN                                                    NO. TUL :  ",
+        "ULP TULUNG", "",
+        "             PEMBERITAHUAN PELAKSANAAN PEMUTUSAN SEMENTARA SAMBUNGAN TENAGA LISTRIK             ",
+        "             ======================================================================             ",
+        "Kepada Yth. ",
+        "Nama              :                                                  ",
+        "ID. Pelanggan     :  \t\t                              Kode Kedudukan :     ",
+        "Alamat            :                                                  ",
+        "Nomor Meter       :                                                                ",
+        "Nama Gardu/Tiang  :  \t                                      Loket    :              ",
+        "Tarip / Daya      :  \t                                      Kelompok :               ", "",
+        "Rekening :        \t\t\t\t                   Rp. :  ",
+        "Jumlah Biaya Keterlambatan s.d bulan :                             Rp. :  ",
+        "                                                                        ---------------",
+        "Jumlah Tunggakan (belum termasuk biaya Administrasi)               Rp. :  ", "",
+        "   Dengan ini diberitahukan dengan hormat bahwa pada hari ini aliran listrik di rumah/alamat seperti tersebut diatas   ",
+        "terpaksa diputus untuk sementara karena rekening listrik belum dilunasi pada waktu yang telah ditetapkan.",
+        "Penyambungan kembali akan dilakukan pada setiap hari jam kerja apabila rekening serta biaya keterlambatan dilunasi",
+        "di tempat penerimaan pembayaran rekening listrik, kantor pos, atau bank yang ditunjuk oleh PLN.                       ",
+        "   Apabila dalam jangka waktu 60 hari terhitung sejak dilakukan pemutusan sementara tunggakan belum dilunasi,         ",
+        "maka instalasi milik PLN akan dibongkar, dan penyambungan kembali dapat dilaksanakan setelah Saudara menyelesaikan    ",
+        "Biaya Penyambungan yang diperlakukan sebagai sambungan baru serta tetap diwajibkan membayar tagihan listrik           ",
+        "yang belum dilunasi beserta dendanya.                     ", "",
+        "UNTUK MENGHINDARI RESIKO, MOHON TIDAK TITIP PEMBAYARAN REKENING KEPADA PETUGAS", "",
+        "                                                                           ",
+        "                                                                               ", "",
+        "|------------------------------------------------------|",
+        "|       PADA WAKTU MELAKUKAN PEMBAYARAN DIMOHON        |",
+        "|         MENUNJUKKAN SURAT PEMBERITAHUAN INI          |",
+        "|------------------------------------------------------|",
+        "                              TGL  STAND PUTUS  PELANGGAN        ", "",
+        "A5 TUL VI-01/PETUGAS PEMUTUS...... ... ... ... ...........                   ",
+        "ABAIKAN PEMBERITAHUAN INI JIKA SUDAH MEMBAYAR TAGIHAN"
+    ]
+    while len(lines) < page_lines:
+        lines.append("")
+    return ("\r\n".join(lines[:page_lines]) + "\r\n") * jml_lembar
+
 
 # ==========================================
 # ANTARMUKA STREAMLIT
 # ==========================================
-st.title("⚡ Aplikasi Olah Data Manbill Tlg")
+st.title("⚡ Aplikasi Olah Data & Cetak TUL")
 
-tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12 = st.tabs([
     "1️⃣ 1: Bikin Data Untuk Koked", 
     "2️⃣ 2: Hasil Koked",
     "3️⃣ 3: Eksport Pdf PB",
@@ -405,7 +729,8 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11 = st.tabs([
     "8️⃣ 8: Update Data (Versi 2)",
     "9️⃣ 9: Isi Petugas",
     "🔟 10: Split Data",
-    "1️⃣1️⃣ 11: Ekstrak Laporan Asli"
+    "1️⃣1️⃣ 11: Ekstrak Laporan Asli",
+    "🖨️ 12: Cetak TUL VI-01"
 ])
 
 # ==========================================
@@ -642,193 +967,143 @@ with tab3:
                 st.warning("⚠️ Tidak ada data tabel yang terdeteksi.")
 
 # ==========================================
-# TAB 4: IMPORT & EKSTRAK PDF (TIPE 2 - MESIN TURBO KOORDINAT & TANPA WATERMARK)
+# TAB 4: IMPORT & EKSTRAK PDF (TIPE 2 - TURBO & RAPIH SESUAI ASLI)
 # ==========================================
 with tab4:
-    st.header("Tahap 4: Import & Ekstrak PDF (Tipe 2 - Mode Turbo Semua Kolom)")
-    st.markdown("Digunakan untuk format PDF standar")
-    pdf_files_t2 = st.file_uploader("Upload File PDF Tipe 2", type=['pdf'], accept_multiple_files=True, key="t4_pdf")
+    st.header("Tahap 4: Ekstrak PDF Tipe 2 (Turbo & Format Utuh)")
+    st.markdown("Menggunakan mesin **Turbo (PyMuPDF)** yang sangat cepat, namun telah dioptimalkan agar membaca **tabel secara utuh sesuai aslinya (16+ Kolom)** tanpa memotong atau menggabungkan data.")
+    pdf_files_t4 = st.file_uploader("Upload File PDF Laporan", type=['pdf'], accept_multiple_files=True, key="t4_pdf")
 
-    if st.button("Proses & Ekstrak Semua Data (Tipe 2)", type="primary"):
-        if not pdf_files_t2: 
+    if st.button("🚀 Proses & Ekstrak Data (Tab 4)", type="primary"):
+        if not pdf_files_t4: 
             st.error("Silakan unggah setidaknya satu file PDF.")
         elif not PYMUPDF_SUPPORT: 
-            st.error("⚠️ Library `pymupdf` belum terpasang! Pastikan ada tulisan `pymupdf` di file requirements.txt GitHub Anda.")
+            st.error("⚠️ Library `pymupdf` belum terpasang!")
         else:
-            work_dir = os.path.join(os.getcwd(), "_temp_turbo_pdf")
-            if os.path.exists(work_dir):
-                shutil.rmtree(work_dir, ignore_errors=True)
-            os.makedirs(work_dir, exist_ok=True)
-
-            os.environ["TMPDIR"] = work_dir
-            tmp_excel_path = os.path.join(work_dir, "Hasil_Semua_Kolom_Tipe2.xlsx")
-
-            wb = openpyxl.Workbook(write_only=True)
-            ws = wb.create_sheet(title="Data")
-            
+            all_extracted_rows = []
             master_headers = None
-            x_splits = None
-            table_x0, table_x1 = 0, 9999
-            total_baris = 0
-            preview_rows = []
-            header_keywords = ['ID PEL', 'IDPEL', 'NOPEL', 'NAMA', 'ALAMAT', 'THBLREK', 'KDDK', 'KODERBM', 'STAND', 'TARIF']
-
-            with st.spinner("🚀 Mengekstraksi PDF dengan Mode Turbo..."):
+            
+            with st.spinner("🚀 Mengekstraksi PDF dengan Mode Turbo Cepat & Rapih..."):
                 progress_bar = st.progress(0)
                 status_text = st.empty()
-                total_files = len(pdf_files_t2)
+                total_files = len(pdf_files_t4)
+                total_baris = 0
 
-                for f_idx, uploaded_pdf in enumerate(pdf_files_t2):
+                for f_idx, uploaded_pdf in enumerate(pdf_files_t4):
                     fname = uploaded_pdf.name
-                    tmp_pdf_path = os.path.join(work_dir, "current.pdf")
                     
-                    uploaded_pdf.seek(0)
-                    with open(tmp_pdf_path, "wb") as f_out:
-                        shutil.copyfileobj(uploaded_pdf, f_out, length=2 * 1024 * 1024)
+                    # Simpan ke temp file agar bisa dibaca kilat oleh fitz
+                    with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp: 
+                        tmp.write(uploaded_pdf.getvalue())
+                        tmp_pdf_path = tmp.name
                     
                     try:
                         doc = fitz.open(tmp_pdf_path)
                         total_hal = len(doc)
 
                         for i, page in enumerate(doc):
-                            if x_splits is None:
-                                tabs = page.find_tables()
-                                if tabs.tables:
-                                    tab = tabs.tables[0]
-                                    raw = tab.extract()
-                                    best_row = max(tab.rows, key=lambda r: sum(1 for c in r.cells if c is not None))
-                                    col_bounds = [(c[0], c[2]) for c in best_row.cells if c is not None]
-                                    table_x0 = col_bounds[0][0] - 5
-                                    table_x1 = col_bounds[-1][1] + 5
-                                    x_splits = [(col_bounds[j][1] + col_bounds[j+1][0]) / 2.0 for j in range(len(col_bounds) - 1)]
-                                    
-                                    for r in raw[:5]:
-                                        cleaned = [str(c).replace('\n', ' ').strip().upper() if c else "" for c in r]
-                                        if sum(1 for kw in header_keywords if kw in " ".join(cleaned)) >= 2:
-                                            master_headers = [c if c else f"KOLOM_{j+1}" for j, c in enumerate(cleaned[:len(col_bounds)])]
-                                            break
-                                    if master_headers is None:
-                                        master_headers = [f"KOLOM_{j+1}" for j in range(len(col_bounds))]
-                                    ws.append(master_headers)
-
-                            if x_splits is None:
-                                continue
-
-                            raw_ys = []
-                            for d in page.get_drawings():
-                                r = d.get("rect")
-                                if r and r.width > 5 and r.x1 > table_x0 and r.x0 < table_x1:
-                                    raw_ys.append(r.y0)
-                                    raw_ys.append(r.y1)
+                            # MESIN TURBO BARU: Ekstrak grid tabel langsung
+                            tabs = page.find_tables()
                             
-                            if not raw_ys:
-                                continue
-                                
-                            raw_ys.sort()
-                            y_cuts = []
-                            for y in raw_ys:
-                                if not y_cuts or (y - y_cuts[-1]) > 3.5:
-                                    y_cuts.append(y)
+                            if tabs.tables:
+                                for tab in tabs.tables:
+                                    raw_data = tab.extract()
                                     
-                            if len(y_cuts) < 2:
-                                continue
-
-                            num_cols = len(x_splits) + 1
-                            num_rows = len(y_cuts) - 1
-                            grid = [[[] for _ in range(num_cols)] for _ in range(num_rows)]
-
-                            text_dict = page.get_text("dict")
-                            for block in text_dict.get("blocks", []):
-                                if block.get("type") != 0:
-                                    continue
-                                for line in block.get("lines", []):
-                                    arah = line.get("dir", (1.0, 0.0))
-                                    if abs(arah[0] - 1.0) > 0.05 or abs(arah[1]) > 0.05:
+                                    if not raw_data or len(raw_data) < 2:
                                         continue
-                                    for span in line.get("spans", []):
-                                        if span.get("size", 0) > 13:
-                                            continue
-                                        txt = span.get("text", "").strip()
-                                        if not txt:
-                                            continue
-                                        bbox = span["bbox"]
-                                        cx = (bbox[0] + bbox[2]) / 2.0
-                                        cy = (bbox[1] + bbox[3]) / 2.0
                                         
-                                        if cx < table_x0 or cx > table_x1 or cy < y_cuts[0] or cy > y_cuts[-1]:
+                                    cleaned_table = []
+                                    for row in raw_data:
+                                        # Bersihkan enter (\n) yang membuat data bertumpuk
+                                        cleaned_row = [str(c).replace('\n', ' ').strip() if c is not None else "" for c in row]
+                                        if any(cleaned_row):
+                                            cleaned_table.append(cleaned_row)
+                                            
+                                    if not cleaned_table:
+                                        continue
+                                        
+                                    # Cari Header Master (di halaman 1)
+                                    if master_headers is None:
+                                        header_keywords = ['NO. AGENDA', 'NAMA PEMOHON', 'NOPEL', 'NO. SIP']
+                                        for r_idx, row in enumerate(cleaned_table[:10]):
+                                            row_str = " ".join([c.upper() for c in row])
+                                            if any(kw in row_str for kw in header_keywords):
+                                                master_headers = row
+                                                # Potong header dari data baris
+                                                cleaned_table = cleaned_table[r_idx + 1:]
+                                                break
+                                        
+                                        if master_headers is None:
+                                            master_headers = [f"Kolom_{x+1}" for x in range(len(cleaned_table[0]))]
+
+                                    # Masukkan baris data
+                                    for row in cleaned_table:
+                                        row_str = " ".join([c.upper() for c in row])
+                                        # Abaikan header yang terulang di setiap pergantian halaman PDF
+                                        if any(kw in row_str for kw in ['NO. AGENDA', 'NAMA PEMOHON', 'NOPEL', 'HALAMAN']):
                                             continue
                                             
-                                        r_idx = bisect.bisect_right(y_cuts, cy) - 1
-                                        c_idx = bisect.bisect_right(x_splits, cx)
-                                        
-                                        if 0 <= r_idx < num_rows and 0 <= c_idx < num_cols:
-                                            grid[r_idx][c_idx].append((round(bbox[1], 1), bbox[0], txt))
+                                        # Samakan jumlah sel dengan header agar tidak error di Excel
+                                        if len(row) < len(master_headers):
+                                            row.extend([""] * (len(master_headers) - len(row)))
+                                        elif len(row) > len(master_headers):
+                                            row = row[:len(master_headers)]
+                                            
+                                        all_extracted_rows.append(row)
+                                        total_baris += 1
 
-                            for r_idx in range(num_rows):
-                                row_vals = []
-                                ada_isi = False
-                                for c_idx in range(num_cols):
-                                    items = grid[r_idx][c_idx]
-                                    if items:
-                                        items.sort()
-                                        val = " ".join(x[2] for x in items)
-                                        row_vals.append(val)
-                                        ada_isi = True
-                                    else:
-                                        row_vals.append("")
-                                
-                                if not ada_isi:
-                                    continue
-                                if row_vals[0].upper() == master_headers[0] or (len(row_vals) > 1 and "IDPEL" in row_vals[1].upper()):
-                                    continue
-                                    
-                                ws.append(row_vals)
-                                total_baris += 1
-                                if len(preview_rows) < 50:
-                                    preview_rows.append(row_vals)
-
-                            if (i + 1) % 25 == 0 or (i + 1) == total_hal:
-                                fitz.TOOLS.store_shrink(100)
-                                progress_bar.progress(min(1.0, (f_idx + ((i + 1) / max(1, total_hal))) / total_files))
-                                status_text.text(f"⚡ File {f_idx+1}/{total_files} ({fname}): Halaman {i+1}/{total_hal} (Terkumpul: {total_baris} baris)...")
-                                gc.collect()
+                            # Update progress bar dengan aman ke memory
+                            fitz.TOOLS.store_shrink(100)
+                            current_progress = (f_idx + ((i + 1) / max(1, total_hal))) / total_files
+                            progress_bar.progress(min(1.0, current_progress))
+                            status_text.text(f"⚡ File {f_idx+1}/{total_files} ({fname}): Halaman {i+1}/{total_hal} (Terkumpul: {total_baris} baris)...")
 
                         doc.close()
-                        if os.path.exists(tmp_pdf_path):
-                            os.remove(tmp_pdf_path)
-                        fitz.TOOLS.store_shrink(100)
-                        gc.collect()
-
                     except Exception as e:
                         st.error(f"Gagal memproses file {fname}: {str(e)}")
+                    finally:
+                        if os.path.exists(tmp_pdf_path): 
+                            os.remove(tmp_pdf_path)
+                        gc.collect()
 
-            wb.save(tmp_excel_path)
-            wb.close()
-            del wb
-            gc.collect()
-
-            if total_baris > 0 and master_headers:
-                try:
-                    status_text.empty()
-                    progress_bar.progress(1.0)
-                    st.success(f"🎉 Selesai Super Cepat! Berhasil mengekstraksi {total_baris} baris bersih tanpa watermark dari {total_files} file!")
-                    
-                    preview_df = pd.DataFrame(preview_rows, columns=master_headers)
-                    st.dataframe(preview_df, use_container_width=True)
-                    
-                    with open(tmp_excel_path, "rb") as f_excel:
-                        st.download_button(
-                            "📥 Download Semua Data Tipe 2 (.xlsx)", 
-                            data=f_excel, 
-                            file_name="Hasil_Semua_Kolom_Tipe2.xlsx", 
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", 
-                            type="primary"
-                        )
-                finally:
-                    shutil.rmtree(work_dir, ignore_errors=True)
+            # Proses Akhir Pembuatan Excel
+            if all_extracted_rows and master_headers:
+                status_text.empty()
+                progress_bar.progress(1.0)
+                
+                # JADIKAN NAMA KOLOM UNIK MENCEGAH ERROR PYARROW
+                unique_headers = []
+                dilihat = {}
+                for idx, col in enumerate(master_headers):
+                    col_bersih = str(col).replace('\n', ' ').strip()
+                    if not col_bersih:
+                        col_bersih = f"Kolom_Kosong_{idx+1}"
+                        
+                    if col_bersih in dilihat:
+                        dilihat[col_bersih] += 1
+                        unique_headers.append(f"{col_bersih}_{dilihat[col_bersih]}")
+                    else:
+                        dilihat[col_bersih] = 0
+                        unique_headers.append(col_bersih)
+                
+                df_final = pd.DataFrame(all_extracted_rows, columns=unique_headers)
+                # Bersihkan baris yang hanya berisi spasi/kosong
+                df_final = df_final.replace(r'^\s*$', np.nan, regex=True).dropna(how='all')
+                df_final = df_final.fillna("")
+                
+                st.success(f"🎉 Selesai Cepat! Berhasil mengekstraksi {len(df_final)} baris data format utuh!")
+                st.dataframe(df_final.head(50), use_container_width=True)
+                
+                st.download_button(
+                    "📥 Download Ekstrak PDF Tipe 2 (.xlsx)", 
+                    data=to_excel_bytes(df_final), 
+                    file_name="Hasil_Ekstrak_Tipe2_Turbo_Rapih.xlsx", 
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", 
+                    type="primary"
+                )
             else:
-                shutil.rmtree(work_dir, ignore_errors=True)
                 st.warning("⚠️ Tidak ada data tabel yang terdeteksi.")
+
 
 # ==========================================
 # TAB 5: PARSING BANYAK FILE ICONPRN KE EXCEL
@@ -910,7 +1185,6 @@ with tab5:
                             alamat = re.search(r'Alamat\s*:\s*(.+)', blok)
                             if alamat: data['Alamat'] = alamat.group(1).strip()
 
-                            # PERBAIKAN DI SINI: MENGIZINKAN ANGKA DAN HURUF UNTUK NOMOR METER
                             meter = re.search(r'Nomor Meter\s*:\s*([A-Z0-9]+)', blok, re.IGNORECASE)
                             if meter: data['Nomor Meter'] = str(meter.group(1).strip())
 
@@ -1005,7 +1279,6 @@ with tab6:
                     df_lama.columns = df_lama.columns.astype(str).str.strip().str.lower()
                     df_baru.columns = df_baru.columns.astype(str).str.strip().str.lower()
 
-                    # Samakan alias nama kolom umum bila memakai master Supabase (misal KDDK <-> KOKED, TARIF <-> TARIP)
                     if 'koked' in df_lama.columns and 'kddk' in df_baru.columns and 'koked' not in df_baru.columns:
                         df_baru.rename(columns={'kddk': 'koked'}, inplace=True)
                     elif 'kddk' in df_lama.columns and 'koked' in df_baru.columns and 'kddk' not in df_baru.columns:
@@ -1200,7 +1473,6 @@ with tab8:
                     df_lama.columns = buat_kolom_unik(cols_lama)
                     df_baru.columns = buat_kolom_unik(cols_baru)
                     
-                    # Samakan alias nama kolom umum bila memakai master Supabase
                     if 'koked' in df_lama.columns and 'kddk' in df_baru.columns and 'koked' not in df_baru.columns:
                         df_baru.rename(columns={'kddk': 'koked'}, inplace=True)
                     elif 'kddk' in df_lama.columns and 'koked' in df_baru.columns and 'kddk' not in df_baru.columns:
@@ -1512,13 +1784,13 @@ with tab10:
 
         except Exception as e:
             st.error(f"❌ Terjadi kesalahan saat memproses data: {e}")
-            
+
 # ==========================================
-# TAB 11: EKSTRAK PDF LAPORAN FORMAT ASLI
+# TAB 11: EKSTRAK PDF LAPORAN FORMAT ASLI (AKURAT)
 # ==========================================
 with tab11:
-    st.header("Tahap 11: Ekstrak PDF Sesuai Asli")
-    st.markdown("Untuk PB, PD, DLL")
+    st.header("Tahap 11: Ekstrak PDF Laporan Sesuai Asli (Akurat)")
+    st.markdown("Menggunakan mesin Hybrid (seperti Tab 3) yang sudah terbukti berhasil membaca garis laporan, tetapi fitur ini **mempertahankan seluruh kolom asli (16 kolom)** tanpa memfilter datanya.")
     
     pdf_files_t11 = st.file_uploader("Upload File PDF Laporan (Tab 11)", type=['pdf'], accept_multiple_files=True, key="t11_pdf")
 
@@ -1546,14 +1818,11 @@ with tab11:
                         with pdfplumber.open(tmp_path) as pdf:
                             total_hal = len(pdf.pages)
                             for i, page in enumerate(pdf.pages):
-                                # 1. Panggil fungsi deteksi tabel milik Tab 3 yang sudah terbukti jalan
                                 tables = get_pdf_tables_tipe1(page)
                                 
                                 for table in tables:
-                                    # 2. Panggil fungsi penyatuan baris miring milik Tab 3
                                     df_hybrid = process_hybrid_table(table)
                                     
-                                    # 3. Langsung simpan DataFrame-nya tanpa masuk ke normalize_pdf_dataframe
                                     if df_hybrid is not None and not df_hybrid.empty: 
                                         all_extracted_dfs.append(df_hybrid)
                                         
@@ -1574,10 +1843,8 @@ with tab11:
                 status_text.empty()
                 progress_bar.progress(1.0)
                 
-                # Menggabungkan semua halaman menjadi 1 Excel
                 df_final = pd.concat(all_extracted_dfs, ignore_index=True)
                 
-                # JADIKAN NAMA KOLOM UNIK MENCEGAH ERROR PYARROW
                 unique_headers = []
                 dilihat = {}
                 for idx, col in enumerate(df_final.columns):
@@ -1593,8 +1860,6 @@ with tab11:
                         unique_headers.append(col_bersih)
                 
                 df_final.columns = unique_headers
-                
-                # Bersihkan DataFrame dari baris yang isinya kosong semua
                 df_final = df_final.replace(r'^\s*$', np.nan, regex=True).dropna(how='all')
                 df_final = df_final.fillna("")
                 
@@ -1611,3 +1876,193 @@ with tab11:
                 )
             else:
                 st.warning("⚠️ Tidak ada data tabel yang terdeteksi dengan format tersebut.")
+
+# ==========================================
+# TAB 12: CETAK TUL VI-01
+# ==========================================
+with tab12:
+    st.header("Tahap 12: Cetak TUL VI-01 (Presisi & Rata Kanan)")
+    st.markdown("Digunakan untuk mencetak Pemberitahuan Pelaksanaan Pemutusan Sementara Sambungan Tenaga Listrik ke format `.iconprn` yang siap dikirim ke printer Dot Matrix.")
+    
+    col_t12_1, col_t12_2 = st.columns([1, 2])
+    
+    with col_t12_1:
+        st.subheader("🖨️ Pengaturan Cetak")
+        mode_cetak = st.radio(
+            "Pilih Tahap Pencetakan:",
+            [
+                "Tahap 2: Isi Blangko Saja",
+                "Tahap 1 & 2 Sekaligus",
+                "Tahap 1 Saja: Cetak Blangko Kosong"
+            ],
+            index=0,
+            key="t12_mode"
+        )
+
+        tipe_printer = st.selectbox(
+            "Pilih Printer yang Digunakan:",
+            [
+                "Epson LQ-2190 (Standar Blangko 15 CPI - ESC g)",
+                "Epson LX-310 / LX-300+II (9-Pin Condensed 17 CPI)",
+                "Epson LX-310 / LX-300+II (9-Pin Elite 12 CPI)"
+            ],
+            help="Jika memakai kertas blangko lama, SELALU pilih opsi LQ-2190.",
+            key="t12_printer"
+        )
+        
+        with st.expander("📐 Kalibrasi Posisi Kertas (Global)"):
+            geser_kanan = st.number_input("Geser Kanan/Kiri Semua Teks (Spasi):", min_value=-15, max_value=30, value=0, key="t12_kanan")
+            geser_bawah = st.number_input("Geser Turun/Naik Semua Teks (Baris):", min_value=-5, max_value=10, value=0, key="t12_bawah")
+            tinggi_halaman = st.number_input("Jumlah Baris per Lembar:", min_value=30, max_value=66, value=44, key="t12_tinggi")
+
+        with st.expander("✍️ Pengaturan Tanda Tangan"):
+            cetak_kota_jabatan = st.checkbox("Cetak tulisan Kota & Jabatan", value=False, key="t12_ctk_jab")
+            geser_tgl = st.number_input("Geser Kiri/Kanan KHUSUS Tanggal (Spasi):", min_value=-30, max_value=30, value=8, key="t12_geser_tgl")
+            kota_cetak = st.text_input("Kota", value="TULUNG", key="t12_kota")
+            tgl_cetak = st.text_input("Tanggal Cetak", value="05-10-2026", key="t12_tgl")
+            jabatan = st.text_input("Jabatan", value="MANAGER", key="t12_jab")
+            nama_manager = st.text_input("Nama Manager", value="MARTONO AJI PRABOWO", key="t12_mgr")
+
+    with col_t12_2:
+        init_esc = get_printer_init_code(tipe_printer)
+        
+        if "Tahap 1 Saja" in mode_cetak:
+            st.subheader("📄 Cetak Blangko Kosong (.iconprn)")
+            jml = st.number_input("Jumlah Lembar Blangko:", min_value=1, max_value=1000, value=50, key="t12_jml_blangko")
+            raw_blanko = buat_blangko_kosong(init_esc, jml, tinggi_halaman)
+            st.download_button(
+                label=f"🖨️ Download BLANKO_{jml}_LEMBAR.iconprn",
+                data=raw_blanko.encode("latin1", errors="replace"),
+                file_name=f"BLANKO_{jml}_LEMBAR.iconprn",
+                mime="application/octet-stream",
+                key="t12_dl_blangko"
+            )
+        else:
+            uploaded_files_t12 = st.file_uploader(
+                "📂 Upload File Data (.xlsx, .xls, .iconprn, atau .zip)", 
+                type=["xlsx", "xls", "iconprn", "prn", "zip"], 
+                accept_multiple_files=True,
+                key="t12_uploads"
+            )
+
+            if uploaded_files_t12:
+                df_t12 = None
+                col_map_final = None 
+                semua_data_iconprn = []
+                excel_uploaded = False
+
+                with st.spinner("Memproses file masukan..."):
+                    for uploaded_file in uploaded_files_t12:
+                        nama_file = uploaded_file.name.lower()
+                        if nama_file.endswith(('.xlsx', '.xls')):
+                            excel_uploaded = True
+                        elif nama_file.endswith('.zip'):
+                            with zipfile.ZipFile(uploaded_file, 'r') as z:
+                                for z_name in z.namelist():
+                                    if z_name.lower().endswith(('.iconprn', '.prn', '.txt')):
+                                        teks_mentah = z.read(z_name).decode('latin1', errors='ignore')
+                                        semua_data_iconprn.extend(baca_data_dari_iconprn_tul(teks_mentah))
+                        else:
+                            teks_mentah = uploaded_file.getvalue().decode('latin1', errors='ignore')
+                            semua_data_iconprn.extend(baca_data_dari_iconprn_tul(teks_mentah))
+                            
+                if excel_uploaded:
+                    file_excel = next(f for f in uploaded_files_t12 if f.name.lower().endswith(('.xlsx', '.xls')))
+                    xls = pd.ExcelFile(file_excel)
+                    pilih_sheet = st.selectbox("Pilih Sheet Excel:", xls.sheet_names, key="t12_sheet") if len(xls.sheet_names) > 1 else xls.sheet_names[0]
+                    df_excel = pd.read_excel(file_excel, sheet_name=pilih_sheet)
+                    
+                    auto_map = deteksi_kolom_otomatis(df_excel.columns.tolist())
+                    kolom_hilang = [k for k, v in auto_map.items() if v is None]
+
+                    with st.expander("🔗 Pengaturan Pencocokan Kolom Excel", expanded=len(kolom_hilang) > 0):
+                        if kolom_hilang:
+                            st.warning(f"⚠️ Ada nama kolom yang berbeda: **{', '.join(kolom_hilang)}**. Silakan pilih manual:")
+                        else:
+                            st.success("✅ Semua kolom Excel otomatis dikenali!")
+
+                        opsi_kolom = ["(Kosongkan)"] + df_excel.columns.tolist()
+                        col_map_final = {}
+                        cols_ui = st.columns(3)
+                        for idx, (field_blangko, terdeteksi) in enumerate(auto_map.items()):
+                            with cols_ui[idx % 3]:
+                                idx_default = opsi_kolom.index(terdeteksi) if terdeteksi in opsi_kolom else 0
+                                col_map_final[field_blangko] = st.selectbox(f"[{field_blangko}]:", opsi_kolom, index=idx_default, key=f"t12_map_{field_blangko}")
+                                if col_map_final[field_blangko] == "(Kosongkan)": col_map_final[field_blangko] = None
+                    df_t12 = df_excel
+
+                else:
+                    if semua_data_iconprn:
+                        df_t12 = pd.DataFrame(semua_data_iconprn)
+                        
+                if df_t12 is not None and len(df_t12) > 0:
+                    st.success(f"✅ Berhasil memuat {len(df_t12)} tagihan pelanggan!")
+                    
+                    kol_petugas = col_map_final.get("petugas") if col_map_final else "petugas"
+                    
+                    if kol_petugas and kol_petugas in df_t12.columns:
+                        df_t12[kol_petugas] = df_t12[kol_petugas].fillna("Tanpa_Petugas").astype(str)
+                        daftar_ptg = sorted(df_t12[kol_petugas].unique().tolist())
+
+                        st.subheader("👷 Pilih Petugas & Urutan Cetak")
+                        ptg_terpilih = st.multiselect("Pilih Kode Petugas:", daftar_ptg, default=[daftar_ptg[0]] if daftar_ptg else [], key="t12_ptg")
+                        df_saring = df_t12[df_t12[kol_petugas].isin(ptg_terpilih)].reset_index(drop=True)
+                    else:
+                        st.subheader("📋 Rentang Urutan Cetak")
+                        ptg_terpilih = ["Semua"]
+                        df_saring = df_t12.reset_index(drop=True)
+
+                    total_data = len(df_saring)
+                    c2, c3 = st.columns(2)
+                    with c2:
+                        urut_awal = st.number_input("Mulai Urutan ke-:", min_value=1, max_value=max(1, total_data), value=1, key="t12_urut_awal")
+                    with c3:
+                        urut_akhir = st.number_input("Sampai Urutan ke-:", min_value=1, max_value=max(1, total_data), value=max(1, total_data), key="t12_urut_akhir")
+
+                    df_cetak = df_saring.iloc[urut_awal - 1 : urut_akhir]
+                    st.info(f"Siap mencetak **{len(df_cetak)} lembar** (Petugas: **{', '.join(ptg_terpilih)}**, Urutan {urut_awal} s/d {urut_akhir}).")
+                    st.dataframe(df_cetak, use_container_width=True, height=220)
+
+                    if len(df_cetak) > 0:
+                        hasil_iconprn = ""
+                        for _, baris in df_cetak.iterrows():
+                            if "Tahap 2" in mode_cetak:
+                                hasil_iconprn += buat_isian_blangko(baris, col_map_final, init_esc, kota_cetak, tgl_cetak, jabatan, nama_manager, cetak_kota_jabatan, geser_tgl, geser_kanan, geser_bawah, tinggi_halaman)
+                            else:
+                                hasil_iconprn += buat_blangko_dan_isi(baris, col_map_final, init_esc, kota_cetak, tgl_cetak, jabatan, nama_manager, tinggi_halaman)
+
+                        nama_ptg_file = "_".join(ptg_terpilih)
+                        
+                        b1, b2 = st.columns(2)
+                        with b1:
+                            st.download_button(
+                                label=f"🖨️ CETAK PETUGAS {nama_ptg_file} ({len(df_cetak)} Lbr)",
+                                data=hasil_iconprn.encode("latin1", errors="replace"),
+                                file_name=f"ISI_BLANGKO_{nama_ptg_file}_{urut_awal}_{urut_akhir}.iconprn",
+                                mime="application/octet-stream",
+                                type="primary",
+                                use_container_width=True,
+                                key="t12_dl_cetak"
+                            )
+                        
+                        with b2:
+                            if kol_petugas and kol_petugas in df_t12.columns:
+                                buf = io.BytesIO()
+                                with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+                                    for kode_p, grp in df_cetak.groupby(kol_petugas):
+                                        teks_p = ""
+                                        for _, r in grp.iterrows():
+                                            if "Tahap 2" in mode_cetak:
+                                                teks_p += buat_isian_blangko(r, col_map_final, init_esc, kota_cetak, tgl_cetak, jabatan, nama_manager, cetak_kota_jabatan, geser_tgl, geser_kanan, geser_bawah, tinggi_halaman)
+                                            else:
+                                                teks_p += buat_blangko_dan_isi(r, col_map_final, init_esc, kota_cetak, tgl_cetak, jabatan, nama_manager, tinggi_halaman)
+                                        zf.writestr(f"PETUGAS_{kode_p}_{len(grp)}lembar.iconprn", teks_p.encode("latin1", errors="replace"))
+                                
+                                st.download_button(
+                                    label="📦 DOWNLOAD PAKET ZIP",
+                                    data=buf.getvalue(),
+                                    file_name=f"PAKET_CETAK_{urut_awal}_sd_{urut_akhir}.zip",
+                                    mime="application/zip",
+                                    use_container_width=True,
+                                    key="t12_dl_zip"
+                                )
