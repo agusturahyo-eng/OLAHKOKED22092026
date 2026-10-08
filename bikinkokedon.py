@@ -1514,11 +1514,11 @@ with tab10:
             st.error(f"❌ Terjadi kesalahan saat memproses data: {e}")
             
 # ==========================================
-# TAB 11: EKSTRAK PDF LAPORAN FORMAT ASLI (AKURAT)
+# TAB 11: EKSTRAK PDF LAPORAN FORMAT ASLI
 # ==========================================
 with tab11:
-    st.header("Tahap 11: Ekstrak PDF Laporan Sesuai Asli (Akurat)")
-    st.markdown("Menggunakan mesin Hybrid (seperti Tab 3) yang sudah terbukti berhasil membaca garis laporan, tetapi fitur ini **mempertahankan seluruh kolom asli (16 kolom)** tanpa memfilter datanya.")
+    st.header("Tahap 11: Ekstrak PDF Laporan Sesuai Asli")
+    st.markdown("Untuk PB, PD, DLL")
     
     pdf_files_t11 = st.file_uploader("Upload File PDF Laporan (Tab 11)", type=['pdf'], accept_multiple_files=True, key="t11_pdf")
 
