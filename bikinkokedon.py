@@ -910,10 +910,10 @@ with tab3:
                 st.warning("⚠️ Tidak ada data tabel yang terdeteksi.")
 
 # ==========================================
-# TAB 4: IMPORT & EKSTRAK PDF (TIPE 2 - MESIN TURBO KOORDINAT & TANPA WATERMARK)
+# TAB 4: IMPORT & EKSTRAK PDF TIPE 2 CEPAT
 # ==========================================
 with tab4:
-    st.header("Tahap 4: Import & Ekstrak PDF (Tipe 2 - Mode Turbo Semua Kolom)")
+    st.header("Tahap 4: Import & Ekstrak PDF (Tipe 2 - Mode Cepat Semua Kolom)")
     st.markdown("Digunakan untuk format PDF standar")
     pdf_files_t2 = st.file_uploader("Upload File PDF Tipe 2", type=['pdf'], accept_multiple_files=True, key="t4_pdf")
 
