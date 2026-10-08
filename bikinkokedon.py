@@ -641,126 +641,192 @@ with tab3:
                 st.warning("⚠️ Tidak ada data tabel yang terdeteksi.")
 
 # ==========================================
-# TAB 4: IMPORT & EKSTRAK PDF (TIPE 2 - TURBO & RAPIH SESUAI ASLI)
+# TAB 4: IMPORT & EKSTRAK PDF (TIPE 2 - MESIN TURBO KOORDINAT & TANPA WATERMARK)
 # ==========================================
 with tab4:
-    st.header("Tahap 4: Ekstrak PDF Tipe 2 (Turbo & Format Utuh)")
-    st.markdown("Menggunakan mesin **Turbo (PyMuPDF)** yang sangat cepat, namun telah dioptimalkan agar membaca **tabel secara utuh sesuai aslinya (16+ Kolom)** tanpa memotong atau menggabungkan data.")
-    pdf_files_t4 = st.file_uploader("Upload File PDF Laporan", type=['pdf'], accept_multiple_files=True, key="t4_pdf")
+    st.header("Tahap 4: Import & Ekstrak PDF (Tipe 2 - Mode Turbo Semua Kolom)")
+    st.markdown("Digunakan untuk format PDF standar")
+    pdf_files_t2 = st.file_uploader("Upload File PDF Tipe 2", type=['pdf'], accept_multiple_files=True, key="t4_pdf")
 
-    if st.button("🚀 Proses & Ekstrak Data (Tab 4)", type="primary"):
-        if not pdf_files_t4: 
+    if st.button("Proses & Ekstrak Semua Data (Tipe 2)", type="primary"):
+        if not pdf_files_t2: 
             st.error("Silakan unggah setidaknya satu file PDF.")
         elif not PYMUPDF_SUPPORT: 
-            st.error("⚠️ Library `pymupdf` belum terpasang!")
+            st.error("⚠️ Library `pymupdf` belum terpasang! Pastikan ada tulisan `pymupdf` di file requirements.txt GitHub Anda.")
         else:
-            all_extracted_rows = []
-            master_headers = None
+            work_dir = os.path.join(os.getcwd(), "_temp_turbo_pdf")
+            if os.path.exists(work_dir):
+                shutil.rmtree(work_dir, ignore_errors=True)
+            os.makedirs(work_dir, exist_ok=True)
+
+            os.environ["TMPDIR"] = work_dir
+            tmp_excel_path = os.path.join(work_dir, "Hasil_Semua_Kolom_Tipe2.xlsx")
+
+            wb = openpyxl.Workbook(write_only=True)
+            ws = wb.create_sheet(title="Data")
             
-            with st.spinner("🚀 Mengekstraksi PDF dengan Mode Turbo Cepat & Rapih..."):
+            master_headers = None
+            x_splits = None
+            table_x0, table_x1 = 0, 9999
+            total_baris = 0
+            preview_rows = []
+            header_keywords = ['ID PEL', 'IDPEL', 'NOPEL', 'NAMA', 'ALAMAT', 'THBLREK', 'KDDK', 'KODERBM', 'STAND', 'TARIF']
+
+            with st.spinner("🚀 Mengekstraksi PDF dengan Mode Turbo..."):
                 progress_bar = st.progress(0)
                 status_text = st.empty()
-                total_files = len(pdf_files_t4)
-                total_baris = 0
+                total_files = len(pdf_files_t2)
 
-                for f_idx, uploaded_pdf in enumerate(pdf_files_t4):
+                for f_idx, uploaded_pdf in enumerate(pdf_files_t2):
                     fname = uploaded_pdf.name
+                    tmp_pdf_path = os.path.join(work_dir, "current.pdf")
                     
-                    # Simpan ke temp file agar bisa dibaca kilat oleh fitz
-                    with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp: 
-                        tmp.write(uploaded_pdf.getvalue())
-                        tmp_pdf_path = tmp.name
+                    uploaded_pdf.seek(0)
+                    with open(tmp_pdf_path, "wb") as f_out:
+                        shutil.copyfileobj(uploaded_pdf, f_out, length=2 * 1024 * 1024)
                     
                     try:
                         doc = fitz.open(tmp_pdf_path)
                         total_hal = len(doc)
 
                         for i, page in enumerate(doc):
-                            # MESIN TURBO BARU: Ekstrak grid tabel langsung
-                            tabs = page.find_tables()
-                            
-                            if tabs.tables:
-                                for tab in tabs.tables:
-                                    raw_data = tab.extract()
+                            if x_splits is None:
+                                tabs = page.find_tables()
+                                if tabs.tables:
+                                    tab = tabs.tables[0]
+                                    raw = tab.extract()
+                                    best_row = max(tab.rows, key=lambda r: sum(1 for c in r.cells if c is not None))
+                                    col_bounds = [(c[0], c[2]) for c in best_row.cells if c is not None]
+                                    table_x0 = col_bounds[0][0] - 5
+                                    table_x1 = col_bounds[-1][1] + 5
+                                    x_splits = [(col_bounds[j][1] + col_bounds[j+1][0]) / 2.0 for j in range(len(col_bounds) - 1)]
                                     
-                                    if not raw_data or len(raw_data) < 2:
-                                        continue
-                                        
-                                    cleaned_table = []
-                                    for row in raw_data:
-                                        # Bersihkan enter (\n) yang membuat data bertumpuk
-                                        cleaned_row = [str(c).replace('\n', ' ').strip() if c is not None else "" for c in row]
-                                        if any(cleaned_row):
-                                            cleaned_table.append(cleaned_row)
-                                            
-                                    if not cleaned_table:
-                                        continue
-                                        
-                                    # Cari Header Master (di halaman 1)
+                                    for r in raw[:5]:
+                                        cleaned = [str(c).replace('\n', ' ').strip().upper() if c else "" for c in r]
+                                        if sum(1 for kw in header_keywords if kw in " ".join(cleaned)) >= 2:
+                                            master_headers = [c if c else f"KOLOM_{j+1}" for j, c in enumerate(cleaned[:len(col_bounds)])]
+                                            break
                                     if master_headers is None:
-                                        header_keywords = ['NO. AGENDA', 'NAMA PEMOHON', 'NOPEL', 'NO. SIP']
-                                        for r_idx, row in enumerate(cleaned_table[:10]):
-                                            row_str = " ".join([c.upper() for c in row])
-                                            if any(kw in row_str for kw in header_keywords):
-                                                master_headers = row
-                                                # Potong header dari data baris
-                                                cleaned_table = cleaned_table[r_idx + 1:]
-                                                break
-                                        
-                                        if master_headers is None:
-                                            master_headers = [f"Kolom_{x+1}" for x in range(len(cleaned_table[0]))]
+                                        master_headers = [f"KOLOM_{j+1}" for j in range(len(col_bounds))]
+                                    ws.append(master_headers)
 
-                                    # Masukkan baris data
-                                    for row in cleaned_table:
-                                        row_str = " ".join([c.upper() for c in row])
-                                        # Abaikan header yang terulang di setiap pergantian halaman PDF
-                                        if any(kw in row_str for kw in ['NO. AGENDA', 'NAMA PEMOHON', 'NOPEL', 'HALAMAN']):
+                            if x_splits is None:
+                                continue
+
+                            raw_ys = []
+                            for d in page.get_drawings():
+                                r = d.get("rect")
+                                if r and r.width > 5 and r.x1 > table_x0 and r.x0 < table_x1:
+                                    raw_ys.append(r.y0)
+                                    raw_ys.append(r.y1)
+                            
+                            if not raw_ys:
+                                continue
+                                
+                            raw_ys.sort()
+                            y_cuts = []
+                            for y in raw_ys:
+                                if not y_cuts or (y - y_cuts[-1]) > 3.5:
+                                    y_cuts.append(y)
+                                    
+                            if len(y_cuts) < 2:
+                                continue
+
+                            num_cols = len(x_splits) + 1
+                            num_rows = len(y_cuts) - 1
+                            grid = [[[] for _ in range(num_cols)] for _ in range(num_rows)]
+
+                            text_dict = page.get_text("dict")
+                            for block in text_dict.get("blocks", []):
+                                if block.get("type") != 0:
+                                    continue
+                                for line in block.get("lines", []):
+                                    arah = line.get("dir", (1.0, 0.0))
+                                    if abs(arah[0] - 1.0) > 0.05 or abs(arah[1]) > 0.05:
+                                        continue
+                                    for span in line.get("spans", []):
+                                        if span.get("size", 0) > 13:
+                                            continue
+                                        txt = span.get("text", "").strip()
+                                        if not txt:
+                                            continue
+                                        bbox = span["bbox"]
+                                        cx = (bbox[0] + bbox[2]) / 2.0
+                                        cy = (bbox[1] + bbox[3]) / 2.0
+                                        
+                                        if cx < table_x0 or cx > table_x1 or cy < y_cuts[0] or cy > y_cuts[-1]:
                                             continue
                                             
-                                        # Samakan jumlah sel dengan header agar tidak error di Excel
-                                        if len(row) < len(master_headers):
-                                            row.extend([""] * (len(master_headers) - len(row)))
-                                        elif len(row) > len(master_headers):
-                                            row = row[:len(master_headers)]
-                                            
-                                        all_extracted_rows.append(row)
-                                        total_baris += 1
+                                        r_idx = bisect.bisect_right(y_cuts, cy) - 1
+                                        c_idx = bisect.bisect_right(x_splits, cx)
+                                        
+                                        if 0 <= r_idx < num_rows and 0 <= c_idx < num_cols:
+                                            grid[r_idx][c_idx].append((round(bbox[1], 1), bbox[0], txt))
 
-                            # Update progress bar dengan aman ke memory
-                            fitz.TOOLS.store_shrink(100)
-                            current_progress = (f_idx + ((i + 1) / max(1, total_hal))) / total_files
-                            progress_bar.progress(min(1.0, current_progress))
-                            status_text.text(f"⚡ File {f_idx+1}/{total_files} ({fname}): Halaman {i+1}/{total_hal} (Terkumpul: {total_baris} baris)...")
+                            for r_idx in range(num_rows):
+                                row_vals = []
+                                ada_isi = False
+                                for c_idx in range(num_cols):
+                                    items = grid[r_idx][c_idx]
+                                    if items:
+                                        items.sort()
+                                        val = " ".join(x[2] for x in items)
+                                        row_vals.append(val)
+                                        ada_isi = True
+                                    else:
+                                        row_vals.append("")
+                                
+                                if not ada_isi:
+                                    continue
+                                if row_vals[0].upper() == master_headers[0] or (len(row_vals) > 1 and "IDPEL" in row_vals[1].upper()):
+                                    continue
+                                    
+                                ws.append(row_vals)
+                                total_baris += 1
+                                if len(preview_rows) < 50:
+                                    preview_rows.append(row_vals)
+
+                            if (i + 1) % 25 == 0 or (i + 1) == total_hal:
+                                fitz.TOOLS.store_shrink(100)
+                                progress_bar.progress(min(1.0, (f_idx + ((i + 1) / max(1, total_hal))) / total_files))
+                                status_text.text(f"⚡ File {f_idx+1}/{total_files} ({fname}): Halaman {i+1}/{total_hal} (Terkumpul: {total_baris} baris)...")
+                                gc.collect()
 
                         doc.close()
-                    except Exception as e:
-                        st.error(f"Gagal memproses file {fname}: {str(e)}")
-                    finally:
-                        if os.path.exists(tmp_pdf_path): 
+                        if os.path.exists(tmp_pdf_path):
                             os.remove(tmp_pdf_path)
+                        fitz.TOOLS.store_shrink(100)
                         gc.collect()
 
-            # Proses Akhir Pembuatan Excel
-            if all_extracted_rows and master_headers:
-                status_text.empty()
-                progress_bar.progress(1.0)
-                
-                df_final = pd.DataFrame(all_extracted_rows, columns=master_headers)
-                # Bersihkan baris yang hanya berisi spasi/kosong
-                df_final = df_final.replace(r'^\s*$', np.nan, regex=True).dropna(how='all')
-                df_final = df_final.fillna("")
-                
-                st.success(f"🎉 Selesai Cepat! Berhasil mengekstraksi {len(df_final)} baris data format utuh!")
-                st.dataframe(df_final.head(50), use_container_width=True)
-                
-                st.download_button(
-                    "📥 Download Ekstrak PDF Tipe 2 (.xlsx)", 
-                    data=to_excel_bytes(df_final), 
-                    file_name="Hasil_Ekstrak_Tipe2_Turbo_Rapih.xlsx", 
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", 
-                    type="primary"
-                )
+                    except Exception as e:
+                        st.error(f"Gagal memproses file {fname}: {str(e)}")
+
+            wb.save(tmp_excel_path)
+            wb.close()
+            del wb
+            gc.collect()
+
+            if total_baris > 0 and master_headers:
+                try:
+                    status_text.empty()
+                    progress_bar.progress(1.0)
+                    st.success(f"🎉 Selesai Super Cepat! Berhasil mengekstraksi {total_baris} baris bersih tanpa watermark dari {total_files} file!")
+                    
+                    preview_df = pd.DataFrame(preview_rows, columns=master_headers)
+                    st.dataframe(preview_df, use_container_width=True)
+                    
+                    with open(tmp_excel_path, "rb") as f_excel:
+                        st.download_button(
+                            "📥 Download Semua Data Tipe 2 (.xlsx)", 
+                            data=f_excel, 
+                            file_name="Hasil_Semua_Kolom_Tipe2.xlsx", 
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", 
+                            type="primary"
+                        )
+                finally:
+                    shutil.rmtree(work_dir, ignore_errors=True)
             else:
+                shutil.rmtree(work_dir, ignore_errors=True)
                 st.warning("⚠️ Tidak ada data tabel yang terdeteksi.")
 
 # ==========================================
