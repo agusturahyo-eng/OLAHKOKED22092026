@@ -599,23 +599,24 @@ def buat_isian_blangko(row, col_map, init_code, kota, tgl, jab, manager, is_ceta
     set_line(31, f"{'':<69}{str_jabatan}")
     set_line(36, f"{'':<64}{BOLD_ON}{manager}{BOLD_OFF}")
 
-    # Jika ada pecahan baris (misal 0.5 baris), gunakan ESC J dan kompensasi di akhir halaman
+    # Logika kompensasi pecahan baris agar total tetap 44 Enter (\n)
     if frac_y > 1e-6:
         if "LQ-2190" in printer_choice:
-            # 24-pin (1/180 inci): 1 baris (1/8 inci) = 22.5 unit (selang-seling 22 & 23 agar presisi)
             line_units = 22 if (page_idx % 2 == 0) else 23
         else:
-            # 9-pin LX-310/300 (1/216 inci): 1 baris (1/8 inci) = 27 unit
             line_units = 27
             
         n_down = int(round(frac_y * line_units))
         n_rem = max(0, line_units - n_down)
         
         esc_down = f"{ESC}J{chr(n_down)}" if n_down > 0 else ""
-        esc_rem = f"\r{ESC}J{chr(n_rem)}" if n_rem > 0 else "\r"
-        
         raw_lines[0] = init_code + esc_down + raw_lines[0]
-        return "\r\n".join(raw_lines) + esc_rem
+        
+        if n_rem > 0:
+            # Mengubah line spacing (ESC 3) KHUSUS untuk baris terakhir, lalu reset kembali (ESC 0)
+            return "\r\n".join(raw_lines) + f"\r{ESC}3{chr(n_rem)}\n{ESC}0"
+        else:
+            return "\r\n".join(raw_lines) + "\r\n"
     else:
         raw_lines[0] = init_code + raw_lines[0]
         return "\r\n".join(raw_lines) + "\r\n"
