@@ -13,6 +13,7 @@ import bisect
 import re
 import gc
 import openpyxl
+import math
 
 # --- PENGATURAN HALAMAN (WAJIB PALING ATAS DI STREAMLIT) ---
 st.set_page_config(page_title="Aplikasi Olah Data & Cetak TUL", layout="wide")
@@ -500,13 +501,41 @@ def format_rupiah(val):
     except Exception:
         return str(val)
 
-def shift_line(text, offset_x):
-    if not text: return ""
-    if offset_x > 0: return (" " * offset_x) + text
-    elif offset_x < 0:
+def get_cpi_value(printer_choice):
+    if "LQ-2190" in printer_choice:
+        return 15.0
+    elif "17 CPI" in printer_choice:
+        return 17.14
+    else:
+        return 12.0
+
+def shift_line(text, offset_x, cpi=15.0):
+    if not text:
+        return ""
+    
+    # Pisahkan angka bulat (spasi utuh) dan desimal (pecahan spasi)
+    int_shift = math.floor(float(offset_x))
+    frac_shift = float(offset_x) - int_shift
+
+    # 1. Geser spasi bulat (jika negatif, potong spasi awal lalu ditambah kompensasi pecahan)
+    if int_shift > 0:
+        shifted = (" " * int_shift) + text
+    elif int_shift < 0:
         leading = len(text) - len(text.lstrip(" "))
-        return text[min(abs(offset_x), leading):]
-    return text
+        shifted = text[min(abs(int_shift), leading):]
+    else:
+        shifted = text
+
+    # 2. Geser pecahan spasi (misal 0.5 spasi) dengan perintah ESC $ nL nH (satuan 1/60 inci)
+    if frac_shift > 1e-6:
+        units = int(round(frac_shift * (60.0 / cpi)))
+        if units > 0:
+            nL = units % 256
+            nH = units // 256
+            esc_micro_x = f"\x1b${chr(nL)}{chr(nH)}"
+            shifted = esc_micro_x + shifted
+
+    return shifted
 
 def ambil_nilai(row, col_map, key, default=""):
     if col_map is None: return str(row.get(key, default)).strip()
@@ -515,10 +544,11 @@ def ambil_nilai(row, col_map, key, default=""):
         return str(row[nama_kolom]).strip()
     return default
 
-def buat_isian_blangko(row, col_map, init_code, kota, tgl, jab, manager, is_cetak_kota, geser_tgl, offset_x=0, offset_y=0, page_lines=44):
+def buat_isian_blangko(row, col_map, init_code, kota, tgl, jab, manager, is_cetak_kota, geser_tgl, offset_x=0.0, offset_y=0.0, page_lines=44, printer_choice="", page_idx=0):
     ESC = "\x1b"
     BOLD_ON = f"{ESC}E"  
     BOLD_OFF = f"{ESC}F" 
+    cpi = get_cpi_value(printer_choice)
 
     no_tul = ambil_nilai(row, col_map, "Nomor TUL")
     nama = ambil_nilai(row, col_map, "Nama")[:33]
@@ -539,10 +569,14 @@ def buat_isian_blangko(row, col_map, init_code, kota, tgl, jab, manager, is_ceta
 
     raw_lines = [""] * page_lines
 
-    def set_line(idx, content):
-        target = idx + offset_y
+    # Pisahkan pergeseran baris bulat dan desimal
+    int_y = math.floor(float(offset_y))
+    frac_y = float(offset_y) - int_y
+
+    def set_line(idx, content, extra_x=0.0):
+        target = idx + int_y
         if 0 <= target < page_lines:
-            raw_lines[target] = shift_line(content, offset_x)
+            raw_lines[target] = shift_line(content, float(offset_x) + float(extra_x), cpi=cpi)
 
     set_line(1,  f"{'':<73}{no_tul}")
     set_line(7,  f"{'':<21}{nama}")
@@ -559,13 +593,31 @@ def buat_isian_blangko(row, col_map, init_code, kota, tgl, jab, manager, is_ceta
     str_kota = f"{kota}, " if is_cetak_kota else ""
     str_jabatan = jab if is_cetak_kota else ""
     
-    posisi_tgl = max(0, 64 + geser_tgl)
-    set_line(30, f"{'':<{posisi_tgl}}{str_kota}{tgl}")
+    set_line(30, f"{'':<64}{str_kota}{tgl}", extra_x=geser_tgl)
     set_line(31, f"{'':<69}{str_jabatan}")
     set_line(36, f"{'':<64}{BOLD_ON}{manager}{BOLD_OFF}")
 
-    raw_lines[0] = init_code + raw_lines[0]
-    return "\r\n".join(raw_lines) + "\r\n"
+    # Jika ada pecahan baris (misal 0.5 baris), gunakan ESC J dan kompensasi di akhir halaman
+    if frac_y > 1e-6:
+        if "LQ-2190" in printer_choice:
+            # 24-pin (1/180 inci): 1 baris (1/8 inci) = 22.5 unit (selang-seling 22 & 23 agar presisi)
+            line_units = 22 if (page_idx % 2 == 0) else 23
+        else:
+            # 9-pin LX-310/300 (1/216 inci): 1 baris (1/8 inci) = 27 unit
+            line_units = 27
+            
+        n_down = int(round(frac_y * line_units))
+        n_rem = max(0, line_units - n_down)
+        
+        esc_down = f"{ESC}J{chr(n_down)}" if n_down > 0 else ""
+        esc_rem = f"\r{ESC}J{chr(n_rem)}" if n_rem > 0 else "\r"
+        
+        raw_lines[0] = init_code + esc_down + raw_lines[0]
+        return "\r\n".join(raw_lines) + esc_rem
+    else:
+        raw_lines[0] = init_code + raw_lines[0]
+        return "\r\n".join(raw_lines) + "\r\n"
+
 
 def buat_blangko_dan_isi(row, col_map, init_code, kota, tgl, jab, manager, page_lines=44):
     ESC = "\x1b"
@@ -1789,13 +1841,13 @@ with tab12:
         tipe_printer = st.selectbox("Pilih Printer yang Digunakan:", ["Epson LQ-2190 (Standar Blangko 15 CPI - ESC g)", "Epson LX-310 / LX-300+II (9-Pin Condensed 17 CPI)", "Epson LX-310 / LX-300+II (9-Pin Elite 12 CPI)"], help="Jika memakai kertas blangko lama, SELALU pilih opsi LQ-2190.", key="t12_printer")
         
         with st.expander("📐 Kalibrasi Posisi Kertas (Global)"):
-            geser_kanan = st.number_input("Geser Kanan/Kiri Semua Teks (Spasi):", min_value=-15, max_value=30, value=0, key="t12_kanan")
-            geser_bawah = st.number_input("Geser Turun/Naik Semua Teks (Baris):", min_value=-5, max_value=10, value=0, key="t12_bawah")
+            geser_kanan = st.number_input("Geser Kanan/Kiri Semua Teks (Spasi):", min_value=-15.0, max_value=30.0, value=0.0, step=0.5, format="%.2f", key="t12_kanan")
+            geser_bawah = st.number_input("Geser Turun/Naik Semua Teks (Baris):", min_value=-5.0, max_value=10.0, value=0.0, step=0.5, format="%.2f", key="t12_bawah")
             tinggi_halaman = st.number_input("Jumlah Baris per Lembar:", min_value=30, max_value=66, value=44, key="t12_tinggi")
 
         with st.expander("✍️ Pengaturan Tanda Tangan"):
             cetak_kota_jabatan = st.checkbox("Cetak tulisan Kota & Jabatan", value=False, key="t12_ctk_jab")
-            geser_tgl = st.number_input("Geser Kiri/Kanan KHUSUS Tanggal (Spasi):", min_value=-30, max_value=30, value=8, key="t12_geser_tgl")
+            geser_tgl = st.number_input("Geser Kiri/Kanan KHUSUS Tanggal (Spasi):", min_value=-30.0, max_value=30.0, value=8.0, step=0.5, format="%.2f", key="t12_geser_tgl")
             kota_cetak = st.text_input("Kota", value="TULUNG", key="t12_kota")
             tgl_cetak = st.text_input("Tanggal Cetak", value="05-10-2026", key="t12_tgl")
             jabatan = st.text_input("Jabatan", value="MANAGER", key="t12_jab")
@@ -1888,9 +1940,11 @@ with tab12:
 
                     if len(df_cetak) > 0:
                         hasil_iconprn = ""
-                        for _, baris in df_cetak.iterrows():
-                            if "Tahap 2" in mode_cetak: hasil_iconprn += buat_isian_blangko(baris, col_map_final, init_esc, kota_cetak, tgl_cetak, jabatan, nama_manager, cetak_kota_jabatan, geser_tgl, geser_kanan, geser_bawah, tinggi_halaman)
-                            else: hasil_iconprn += buat_blangko_dan_isi(baris, col_map_final, init_esc, kota_cetak, tgl_cetak, jabatan, nama_manager, tinggi_halaman)
+                        for page_idx, (_, baris) in enumerate(df_cetak.iterrows()):
+                            if "Tahap 2" in mode_cetak:
+                                hasil_iconprn += buat_isian_blangko(baris, col_map_final, init_esc, kota_cetak, tgl_cetak, jabatan, nama_manager, cetak_kota_jabatan, geser_tgl, geser_kanan, geser_bawah, tinggi_halaman, tipe_printer, page_idx)
+                            else:
+                                hasil_iconprn += buat_blangko_dan_isi(baris, col_map_final, init_esc, kota_cetak, tgl_cetak, jabatan, nama_manager, tinggi_halaman)
 
                         nama_ptg_file = "_".join(ptg_terpilih)
                         
@@ -1911,9 +1965,11 @@ with tab12:
                                 with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
                                     for kode_p, grp in df_cetak.groupby(kol_petugas):
                                         teks_p = ""
-                                        for _, r in grp.iterrows():
-                                            if "Tahap 2" in mode_cetak: teks_p += buat_isian_blangko(r, col_map_final, init_esc, kota_cetak, tgl_cetak, jabatan, nama_manager, cetak_kota_jabatan, geser_tgl, geser_kanan, geser_bawah, tinggi_halaman)
-                                            else: teks_p += buat_blangko_dan_isi(r, col_map_final, init_esc, kota_cetak, tgl_cetak, jabatan, nama_manager, tinggi_halaman)
+                                        for p_idx, (_, r) in enumerate(grp.iterrows()):
+                                            if "Tahap 2" in mode_cetak:
+                                                teks_p += buat_isian_blangko(r, col_map_final, init_esc, kota_cetak, tgl_cetak, jabatan, nama_manager, cetak_kota_jabatan, geser_tgl, geser_kanan, geser_bawah, tinggi_halaman, tipe_printer, p_idx)
+                                            else:
+                                                teks_p += buat_blangko_dan_isi(r, col_map_final, init_esc, kota_cetak, tgl_cetak, jabatan, nama_manager, tinggi_halaman)
                                         zf.writestr(f"PETUGAS_{kode_p}_{len(grp)}lembar.iconprn", teks_p.encode("latin1", errors="replace"))
                                 
                                 st.download_button(
