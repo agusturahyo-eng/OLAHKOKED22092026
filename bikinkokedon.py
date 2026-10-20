@@ -1,5 +1,5 @@
 import streamlit as st
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 import pandas as pd
 import numpy as np
 from dbfread import DBF
@@ -1852,10 +1852,11 @@ with tab12:
             geser_tgl = st.number_input("Geser Kiri/Kanan KHUSUS Tanggal (Spasi):", min_value=-30.0, max_value=30.0, value=8.0, step=0.5, format="%.2f", key="t12_geser_tgl")
             kota_cetak = st.text_input("Kota", value="TULUNG", key="t12_kota")
             
-            # --- UBAH BAGIAN INI ---
-            tgl_hari_ini = datetime.now().strftime("%d-%m-%Y")
+            # --- UBAH BAGIAN INI UNTUK MENGUNCI ZONA WAKTU WIB (UTC+7) ---
+            zona_wib = timezone(timedelta(hours=7))
+            tgl_hari_ini = datetime.now(zona_wib).strftime("%d-%m-%Y")
             tgl_cetak = st.text_input("Tanggal Cetak", value=tgl_hari_ini, key="t12_tgl")
-            # -----------------------
+            # -------------------------------------------------------------
             
             jabatan = st.text_input("Jabatan", value="MANAGER", key="t12_jab")
             nama_manager = st.text_input("Nama Manager", value="MARTONO AJI PRABOWO", key="t12_mgr")
