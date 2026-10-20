@@ -1,4 +1,5 @@
 import streamlit as st
+from datetime import datetime
 import pandas as pd
 import numpy as np
 from dbfread import DBF
@@ -14,6 +15,7 @@ import re
 import gc
 import openpyxl
 import math
+
 
 # --- PENGATURAN HALAMAN (WAJIB PALING ATAS DI STREAMLIT) ---
 st.set_page_config(page_title="Aplikasi Olah Data & Cetak TUL", layout="wide")
@@ -1849,7 +1851,12 @@ with tab12:
             cetak_kota_jabatan = st.checkbox("Cetak tulisan Kota & Jabatan", value=False, key="t12_ctk_jab")
             geser_tgl = st.number_input("Geser Kiri/Kanan KHUSUS Tanggal (Spasi):", min_value=-30.0, max_value=30.0, value=8.0, step=0.5, format="%.2f", key="t12_geser_tgl")
             kota_cetak = st.text_input("Kota", value="TULUNG", key="t12_kota")
-            tgl_cetak = st.text_input("Tanggal Cetak", value="05-10-2026", key="t12_tgl")
+            
+            # --- UBAH BAGIAN INI ---
+            tgl_hari_ini = datetime.now().strftime("%d-%m-%Y")
+            tgl_cetak = st.text_input("Tanggal Cetak", value=tgl_hari_ini, key="t12_tgl")
+            # -----------------------
+            
             jabatan = st.text_input("Jabatan", value="MANAGER", key="t12_jab")
             nama_manager = st.text_input("Nama Manager", value="MARTONO AJI PRABOWO", key="t12_mgr")
 
