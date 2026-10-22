@@ -803,11 +803,27 @@ with tab1:
                     kolom_export = ['IDPEL', 'KOKED', 'NAMA', 'ALAMAT', 'TARIP', 'DAYA']
                     zip_buffer = io.BytesIO()
                     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+                        
+                        # --- FUNGSI PENOMORAN RESET PER 7 DIGIT KOKED (Misal: HBAJCAA) ---
+                        def tambah_nomor_urut_koked(df_target):
+                            df_copy = df_target.copy()
+                            if 'KOKED' in df_copy.columns:
+                                # Ambil 7 karakter pertama sebagai dasar grup (case-insensitive)
+                                base_koked = df_copy['KOKED'].astype(str).str[:7].str.upper()
+                                # Berikan nomor berurutan yang reset otomatis jika base_koked berubah
+                                df_copy.insert(0, 'NO', df_copy.groupby(base_koked).cumcount() + 1)
+                            else:
+                                df_copy.insert(0, 'NO', range(1, len(df_copy) + 1))
+                            return df_copy
+
+                        # 1. Tambah nomor urut untuk file PB_SEMUA_PETUGAS
                         if not df_pb.empty:
-                            df_pb_clean = df_pb.drop_duplicates(subset=['IDPEL'], keep='first')
-                            pb_bytes = to_excel_bytes(df_pb_clean[kolom_export])
+                            df_pb_clean = df_pb.drop_duplicates(subset=['IDPEL'], keep='first').copy()
+                            df_pb_clean = tambah_nomor_urut_koked(df_pb_clean)
+                            pb_bytes = to_excel_bytes(df_pb_clean[['NO'] + kolom_export])
                             zip_file.writestr("PB_SEMUA_PETUGAS.xlsx", pb_bytes)
 
+                        # Menggabungkan data Master
                         df_master_base = df_master[kolom_export].copy() if not df_master.empty else pd.DataFrame(columns=kolom_export)
                         df_pb_master_format = df_pb[kolom_export].copy()
                         df_master_combined = pd.concat([df_master_base, df_pb_master_format], ignore_index=True)
@@ -831,7 +847,10 @@ with tab1:
                         valid_alamat = in_baru & updated_alamat.notna() & (updated_alamat.astype(str).str.strip() != '') & (~updated_alamat.astype(str).str.contains(r'\*', na=False))
                         df_master_combined.loc[valid_alamat, 'ALAMAT'] = updated_alamat[valid_alamat]
 
-                        zip_file.writestr("MASTER_UPDATED.xlsx", to_excel_bytes(df_master_combined[kolom_export]))
+                        # 2. Tambah nomor urut untuk file MASTER_UPDATED
+                        df_master_export = df_master_combined[kolom_export].copy()
+                        df_master_export = tambah_nomor_urut_koked(df_master_export)
+                        zip_file.writestr("MASTER_UPDATED.xlsx", to_excel_bytes(df_master_export[['NO'] + kolom_export]))
 
                         mapping = {
                             'C01': 'JCA', 'C02': 'TAA', 'C03': 'JCB', 'C04': 'JCC', 'C05': 'NCD',
@@ -843,14 +862,20 @@ with tab1:
                             'C29': ['JCJ', 'KCJ'], 'C30': 'TAJ', 'C31': 'MBK', 'C32': 'KBL',
                             'C33': 'TAK', 'C34': 'KAL', 'C35': 'JCL', 'C36': 'MBD'
                         }
+                        
+                        # 3. Tambah nomor urut untuk file per-petugas (C01, C02, dst.)
                         def export_excel(df_source, prefix=""):
                             if df_source.empty: return
                             for nama_file, kriteria in mapping.items():
-                                if isinstance(kriteria, list): temp_df = df_source[df_source['KOKED'].astype(str).str[3:6].isin(kriteria)]
-                                else: temp_df = df_source[df_source['KOKED'].astype(str).str[3:6] == kriteria]
+                                if isinstance(kriteria, list): temp_df = df_source[df_source['KOKED'].astype(str).str[3:6].isin(kriteria)].copy()
+                                else: temp_df = df_source[df_source['KOKED'].astype(str).str[3:6] == kriteria].copy()
+                                
                                 if not temp_df.empty:
-                                    temp_df = temp_df.drop_duplicates(subset=['IDPEL'], keep='first')
-                                    zip_file.writestr(f"{prefix}{nama_file}.xlsx", to_excel_bytes(temp_df[kolom_export]))
+                                    temp_df = temp_df.drop_duplicates(subset=['IDPEL'], keep='first').copy()
+                                    # Mengaplikasikan fungsi reset nomor
+                                    temp_df = tambah_nomor_urut_koked(temp_df)
+                                    zip_file.writestr(f"{prefix}{nama_file}.xlsx", to_excel_bytes(temp_df[['NO'] + kolom_export]))
+                                    
                         export_excel(df_pb, "PB_")
                         export_excel(df_tetap, "")
                         
