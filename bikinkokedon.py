@@ -5,6 +5,13 @@ from dbfread import DBF
 import os
 import sys
 import io
+import csvimport streamlit as st
+import pandas as pd
+import numpy as np
+from dbfread import DBF
+import os
+import sys
+import io
 import csv
 import shutil
 import zipfile
@@ -487,7 +494,6 @@ def deteksi_kolom_otomatis(df_cols):
         mapping[target] = found
     return mapping
 
-# ---> TAMBAHAN SET PAGE LENGTH DI INIT CODE
 def get_printer_init_code(printer_choice, page_lines=44):
     ESC = "\x1b"
     base = ""
@@ -847,10 +853,8 @@ with tab1:
                         valid_alamat = in_baru & updated_alamat.notna() & (updated_alamat.astype(str).str.strip() != '') & (~updated_alamat.astype(str).str.contains(r'\*', na=False))
                         df_master_combined.loc[valid_alamat, 'ALAMAT'] = updated_alamat[valid_alamat]
 
-                        # 2. Tambah nomor urut untuk file MASTER_UPDATED
-                        df_master_export = df_master_combined[kolom_export].copy()
-                        df_master_export = tambah_nomor_urut_koked(df_master_export)
-                        zip_file.writestr("MASTER_UPDATED.xlsx", to_excel_bytes(df_master_export[['NO'] + kolom_export]))
+                        # 2. File MASTER_UPDATED (TIDAK DIBERI NOMOR URUT)
+                        zip_file.writestr("MASTER_UPDATED.xlsx", to_excel_bytes(df_master_combined[kolom_export]))
 
                         mapping = {
                             'C01': 'JCA', 'C02': 'TAA', 'C03': 'JCB', 'C04': 'JCC', 'C05': 'NCD',
@@ -1190,7 +1194,7 @@ with tab5:
                     match_daya = re.search(r'/(\d+)', str(tarif_daya))
                     if match_daya: daya = int(match_daya.group(1))
                     if daya > 33000: return "PLN"
-                    idpel_khusus = {"524051069054": "c28", "524051263717": "c36", "524051265123": "c36", "524051104194": "c04", "524051000615": "c08", "524050867033": "c08"}
+                    idpel_khusus = {"524051069054": "c28", "524051263717": "c36", "524051265123": "c36", "524051104194": "c04", "524050867033": "c08"}
                     if str(idpel) in idpel_khusus: return idpel_khusus[str(idpel)]
                     if len(str(kddk)) >= 6:
                         kode_mid = str(kddk)[3:6].upper()
