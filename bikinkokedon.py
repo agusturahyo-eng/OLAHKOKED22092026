@@ -1,5 +1,4 @@
 import streamlit as st
-from datetime import datetime, timedelta, timezone
 import pandas as pd
 import numpy as np
 from dbfread import DBF
@@ -15,7 +14,7 @@ import re
 import gc
 import openpyxl
 import math
-
+from datetime import datetime, timedelta, timezone
 
 # --- PENGATURAN HALAMAN (WAJIB PALING ATAS DI STREAMLIT) ---
 st.set_page_config(page_title="Aplikasi Olah Data & Cetak TUL", layout="wide")
@@ -419,7 +418,6 @@ def baca_data_dari_iconprn_tul(teks_mentah):
         alamat = re.search(r'Alamat\s*:\s*(.+)', blok)
         if alamat: data['Alamat'] = alamat.group(1).strip()
 
-        # AMAN: Nomor meter mendukung alphanumeric
         meter = re.search(r'Nomor Meter\s*:\s*([A-Z0-9]+)', blok, re.IGNORECASE)
         if meter: data['Nomor Meter'] = str(meter.group(1).strip())
 
@@ -489,11 +487,14 @@ def deteksi_kolom_otomatis(df_cols):
         mapping[target] = found
     return mapping
 
-def get_printer_init_code(printer_choice):
+# ---> TAMBAHAN SET PAGE LENGTH DI INIT CODE
+def get_printer_init_code(printer_choice, page_lines=44):
     ESC = "\x1b"
-    if "LQ-2190" in printer_choice: return f"{ESC}g{ESC}0"
-    elif "17 CPI" in printer_choice: return f"{ESC}P\x0f{ESC}0"
-    else: return f"{ESC}M\x12{ESC}0"
+    base = ""
+    if "LQ-2190" in printer_choice: base = f"{ESC}g{ESC}0"
+    elif "17 CPI" in printer_choice: base = f"{ESC}P\x0f{ESC}0"
+    else: base = f"{ESC}M\x12{ESC}0"
+    return f"{base}{ESC}C{chr(page_lines)}"
 
 def format_rupiah(val):
     try:
@@ -504,39 +505,27 @@ def format_rupiah(val):
         return str(val)
 
 def get_cpi_value(printer_choice):
-    if "LQ-2190" in printer_choice:
-        return 15.0
-    elif "17 CPI" in printer_choice:
-        return 17.14
-    else:
-        return 12.0
+    if "LQ-2190" in printer_choice: return 15.0
+    elif "17 CPI" in printer_choice: return 17.14
+    else: return 12.0
 
 def shift_line(text, offset_x, cpi=15.0):
-    if not text:
-        return ""
-    
-    # Pisahkan angka bulat (spasi utuh) dan desimal (pecahan spasi)
+    if not text: return ""
     int_shift = math.floor(float(offset_x))
     frac_shift = float(offset_x) - int_shift
-
-    # 1. Geser spasi bulat (jika negatif, potong spasi awal lalu ditambah kompensasi pecahan)
-    if int_shift > 0:
-        shifted = (" " * int_shift) + text
+    
+    if int_shift > 0: shifted = (" " * int_shift) + text
     elif int_shift < 0:
         leading = len(text) - len(text.lstrip(" "))
         shifted = text[min(abs(int_shift), leading):]
-    else:
-        shifted = text
+    else: shifted = text
 
-    # 2. Geser pecahan spasi (misal 0.5 spasi) dengan perintah ESC $ nL nH (satuan 1/60 inci)
     if frac_shift > 1e-6:
         units = int(round(frac_shift * (60.0 / cpi)))
         if units > 0:
             nL = units % 256
             nH = units // 256
-            esc_micro_x = f"\x1b${chr(nL)}{chr(nH)}"
-            shifted = esc_micro_x + shifted
-
+            shifted = f"\x1b${chr(nL)}{chr(nH)}" + shifted
     return shifted
 
 def ambil_nilai(row, col_map, key, default=""):
@@ -570,8 +559,6 @@ def buat_isian_blangko(row, col_map, init_code, kota, tgl, jab, manager, is_ceta
     rp_total = format_rupiah(ambil_nilai(row, col_map, "Jumlah Tunggakan", "0")).rjust(15)
 
     raw_lines = [""] * page_lines
-
-    # Pisahkan pergeseran baris bulat dan desimal
     int_y = math.floor(float(offset_y))
     frac_y = float(offset_y) - int_y
 
@@ -599,28 +586,27 @@ def buat_isian_blangko(row, col_map, init_code, kota, tgl, jab, manager, is_ceta
     set_line(31, f"{'':<69}{str_jabatan}")
     set_line(36, f"{'':<64}{BOLD_ON}{manager}{BOLD_OFF}")
 
-    # Logika kompensasi pecahan baris agar total tetap 44 Enter (\n)
+    # Pangkas baris kosong di bawah agar Form Feed yang mengontrol sisa kertas
+    last_idx = 0
+    for i in range(page_lines - 1, -1, -1):
+        if raw_lines[i] != "":
+            last_idx = i
+            break
+            
+    output_lines = raw_lines[:last_idx + 1]
+
     if frac_y > 1e-6:
-        if "LQ-2190" in printer_choice:
-            line_units = 22 if (page_idx % 2 == 0) else 23
-        else:
-            line_units = 27
+        if "LQ-2190" in printer_choice: line_units = 23 
+        else: line_units = 27
             
         n_down = int(round(frac_y * line_units))
-        n_rem = max(0, line_units - n_down)
-        
-        esc_down = f"{ESC}J{chr(n_down)}" if n_down > 0 else ""
-        raw_lines[0] = init_code + esc_down + raw_lines[0]
-        
-        if n_rem > 0:
-            # Mengubah line spacing (ESC 3) KHUSUS untuk baris terakhir, lalu reset kembali (ESC 0)
-            return "\r\n".join(raw_lines) + f"\r{ESC}3{chr(n_rem)}\n{ESC}0"
-        else:
-            return "\r\n".join(raw_lines) + "\r\n"
-    else:
-        raw_lines[0] = init_code + raw_lines[0]
-        return "\r\n".join(raw_lines) + "\r\n"
+        if n_down > 0:
+            output_lines[0] = f"{ESC}J{chr(n_down)}" + output_lines[0]
 
+    output_lines[0] = init_code + output_lines[0]
+    
+    # Kunci Akurasi: Akhiri lembaran dengan Form Feed (\x0C)
+    return "\r\n".join(output_lines) + "\r\x0C"
 
 def buat_blangko_dan_isi(row, col_map, init_code, kota, tgl, jab, manager, page_lines=44):
     ESC = "\x1b"
@@ -687,9 +673,11 @@ def buat_blangko_dan_isi(row, col_map, init_code, kota, tgl, jab, manager, page_
         "A5 TUL VI-01/PETUGAS PEMUTUS...... ... ... ... ...........                   ",
         "ABAIKAN PEMBERITAHUAN INI JIKA SUDAH MEMBAYAR TAGIHAN"
     ]
-    while len(lines) < page_lines:
-        lines.append("")
-    return "\r\n".join(lines[:page_lines]) + "\r\n"
+    
+    while lines and lines[-1].strip() == "":
+        lines.pop()
+        
+    return "\r\n".join(lines) + "\r\x0C"
 
 def buat_blangko_kosong(init_code, jml_lembar=50, page_lines=44):
     lines = [
@@ -728,9 +716,13 @@ def buat_blangko_kosong(init_code, jml_lembar=50, page_lines=44):
         "A5 TUL VI-01/PETUGAS PEMUTUS...... ... ... ... ...........                   ",
         "ABAIKAN PEMBERITAHUAN INI JIKA SUDAH MEMBAYAR TAGIHAN"
     ]
-    while len(lines) < page_lines:
-        lines.append("")
-    return ("\r\n".join(lines[:page_lines]) + "\r\n") * jml_lembar
+    
+    while lines and lines[-1].strip() == "":
+        lines.pop()
+        
+    single_page = "\r\n".join(lines) + "\r\x0C"
+    return single_page * jml_lembar
+
 
 # ==========================================
 # ANTARMUKA STREAMLIT
@@ -906,7 +898,7 @@ with tab2:
                     df_lama_pem.columns = df_lama_pem.columns.astype(str).str.strip().str.upper()
 
                     df_petugas.rename(columns={'KDDK': 'KOKED', 'TARIP': 'TARIF'}, inplace=True)
-                    df_lama_pem.rename(columns={'KDDK': 'KOKED', 'TARIP': 'TARIF'}, inplace=True)
+                    df_lama_pem.rename(columns={'KDDK': 'KOKED', 'TARIF': 'TARIF'}, inplace=True)
 
                     df_compare = df_petugas[['IDPEL', 'KOKED']].merge(df_lama_pem[['IDPEL', 'KOKED']], on='IDPEL', suffixes=('_BARU', '_LAMA'))
                     df_changed = df_compare[(df_compare['KOKED_BARU'] != df_compare['KOKED_LAMA']) & (df_compare['KOKED_LAMA'] != '')]
@@ -1853,17 +1845,15 @@ with tab12:
             geser_tgl = st.number_input("Geser Kiri/Kanan KHUSUS Tanggal (Spasi):", min_value=-30.0, max_value=30.0, value=8.0, step=0.5, format="%.2f", key="t12_geser_tgl")
             kota_cetak = st.text_input("Kota", value="TULUNG", key="t12_kota")
             
-            # --- UBAH BAGIAN INI UNTUK MENGUNCI ZONA WAKTU WIB (UTC+7) ---
             zona_wib = timezone(timedelta(hours=7))
             tgl_hari_ini = datetime.now(zona_wib).strftime("%d-%m-%Y")
             tgl_cetak = st.text_input("Tanggal Cetak", value=tgl_hari_ini, key="t12_tgl")
-            # -------------------------------------------------------------
             
             jabatan = st.text_input("Jabatan", value="MANAGER", key="t12_jab")
             nama_manager = st.text_input("Nama Manager", value="MARTONO AJI PRABOWO", key="t12_mgr")
 
     with col_t12_2:
-        init_esc = get_printer_init_code(tipe_printer)
+        init_esc = get_printer_init_code(tipe_printer, tinggi_halaman)
         
         if "Tahap 1 Saja" in mode_cetak:
             st.subheader("📄 Cetak Blangko Kosong (.iconprn)")
