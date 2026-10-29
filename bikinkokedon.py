@@ -6,14 +6,6 @@ import os
 import sys
 import io
 import csv
-import streamlit as st
-import pandas as pd
-import numpy as np
-from dbfread import DBF
-import os
-import sys
-import io
-import csv
 import shutil
 import zipfile
 import tempfile
@@ -23,6 +15,12 @@ import gc
 import openpyxl
 import math
 from datetime import datetime, timedelta, timezone
+
+# --- PEMULIHAN OTOMATIS FOLDER TEMPORARY SISTEM ---
+if "TMPDIR" in os.environ and ("_temp_turbo_pdf" in os.environ.get("TMPDIR", "") or not os.path.exists(os.environ.get("TMPDIR", ""))):
+    os.environ.pop("TMPDIR", None)
+if tempfile.tempdir is not None and ("_temp_turbo_pdf" in str(tempfile.tempdir) or not os.path.exists(str(tempfile.tempdir))):
+    tempfile.tempdir = None
 
 # --- PENGATURAN HALAMAN (WAJIB PALING ATAS DI STREAMLIT) ---
 st.set_page_config(page_title="Aplikasi Olah Data & Cetak TUL", layout="wide")
@@ -815,9 +813,7 @@ with tab1:
                         def tambah_nomor_urut_koked(df_target):
                             df_copy = df_target.copy()
                             if 'KOKED' in df_copy.columns:
-                                # Ambil 7 karakter pertama sebagai dasar grup (case-insensitive)
                                 base_koked = df_copy['KOKED'].astype(str).str[:7].str.upper()
-                                # Berikan nomor berurutan yang reset otomatis jika base_koked berubah
                                 df_copy.insert(0, 'NO', df_copy.groupby(base_koked).cumcount() + 1)
                             else:
                                 df_copy.insert(0, 'NO', range(1, len(df_copy) + 1))
@@ -877,7 +873,6 @@ with tab1:
                                 
                                 if not temp_df.empty:
                                     temp_df = temp_df.drop_duplicates(subset=['IDPEL'], keep='first').copy()
-                                    # Mengaplikasikan fungsi reset nomor
                                     temp_df = tambah_nomor_urut_koked(temp_df)
                                     zip_file.writestr(f"{prefix}{nama_file}.xlsx", to_excel_bytes(temp_df[['NO'] + kolom_export]))
                                     
@@ -963,11 +958,8 @@ with tab3:
             all_extracted_dfs = []
             with st.spinner("Mengekstraksi data Tipe 1 (Tanpa Watermark)..."):
                 for uploaded_pdf in pdf_files_t1:
-                    with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp: 
-                        tmp.write(uploaded_pdf.getvalue())
-                        tmp_path = tmp.name
                     try:
-                        with pdfplumber.open(tmp_path) as pdf:
+                        with pdfplumber.open(io.BytesIO(uploaded_pdf.getvalue())) as pdf:
                             for page in pdf.pages:
                                 tables = get_pdf_tables_tipe1(page)
                                 for table in tables:
@@ -975,8 +967,8 @@ with tab3:
                                     if df_hybrid is not None and not df_hybrid.empty: 
                                         all_extracted_dfs.append(df_hybrid)
                                 page.flush_cache()
-                    finally:
-                        if os.path.exists(tmp_path): os.remove(tmp_path)
+                    except Exception as e:
+                        st.error(f"Gagal memproses {uploaded_pdf.name}: {str(e)}")
 
             if all_extracted_dfs:
                 final_pdf_df = normalize_pdf_dataframe(pd.concat(all_extracted_dfs, ignore_index=True))
@@ -1000,14 +992,6 @@ with tab4:
         elif not PYMUPDF_SUPPORT: 
             st.error("⚠️ Library `pymupdf` belum terpasang! Pastikan ada tulisan `pymupdf` di file requirements.txt GitHub Anda.")
         else:
-            work_dir = os.path.join(os.getcwd(), "_temp_turbo_pdf")
-            if os.path.exists(work_dir):
-                shutil.rmtree(work_dir, ignore_errors=True)
-            os.makedirs(work_dir, exist_ok=True)
-
-            #os.environ["TMPDIR"] = work_dir
-            tmp_excel_path = os.path.join(work_dir, "Hasil_Semua_Kolom_Tipe2.xlsx")
-
             wb = openpyxl.Workbook(write_only=True)
             ws = wb.create_sheet(title="Data")
             
@@ -1025,14 +1009,11 @@ with tab4:
 
                 for f_idx, uploaded_pdf in enumerate(pdf_files_t2):
                     fname = uploaded_pdf.name
-                    tmp_pdf_path = os.path.join(work_dir, "current.pdf")
-                    
-                    uploaded_pdf.seek(0)
-                    with open(tmp_pdf_path, "wb") as f_out:
-                        shutil.copyfileobj(uploaded_pdf, f_out, length=2 * 1024 * 1024)
+                    pdf_bytes = uploaded_pdf.getvalue()
+                    baris_file_ini = 0
                     
                     try:
-                        doc = fitz.open(tmp_pdf_path)
+                        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
                         total_hal = len(doc)
 
                         for i, page in enumerate(doc):
@@ -1043,94 +1024,91 @@ with tab4:
                                     raw = tab.extract()
                                     best_row = max(tab.rows, key=lambda r: sum(1 for c in r.cells if c is not None))
                                     col_bounds = [(c[0], c[2]) for c in best_row.cells if c is not None]
-                                    table_x0 = col_bounds[0][0] - 5
-                                    table_x1 = col_bounds[-1][1] + 5
-                                    x_splits = [(col_bounds[j][1] + col_bounds[j+1][0]) / 2.0 for j in range(len(col_bounds) - 1)]
-                                    
-                                    for r in raw[:5]:
-                                        cleaned = [str(c).replace('\n', ' ').strip().upper() if c else "" for c in r]
-                                        if sum(1 for kw in header_keywords if kw in " ".join(cleaned)) >= 2:
-                                            master_headers = [c if c else f"KOLOM_{j+1}" for j, c in enumerate(cleaned[:len(col_bounds)])]
-                                            break
-                                    if master_headers is None:
-                                        master_headers = [f"KOLOM_{j+1}" for j in range(len(col_bounds))]
-                                    ws.append(master_headers)
-
-                            if x_splits is None:
-                                continue
-
-                            raw_ys = []
-                            for d in page.get_drawings():
-                                r = d.get("rect")
-                                if r and r.width > 5 and r.x1 > table_x0 and r.x0 < table_x1:
-                                    raw_ys.append(r.y0)
-                                    raw_ys.append(r.y1)
-                            
-                            if not raw_ys:
-                                continue
-                                
-                            raw_ys.sort()
-                            y_cuts = []
-                            for y in raw_ys:
-                                if not y_cuts or (y - y_cuts[-1]) > 3.5:
-                                    y_cuts.append(y)
-                                    
-                            if len(y_cuts) < 2:
-                                continue
-
-                            num_cols = len(x_splits) + 1
-                            num_rows = len(y_cuts) - 1
-                            grid = [[[] for _ in range(num_cols)] for _ in range(num_rows)]
-
-                            text_dict = page.get_text("dict")
-                            for block in text_dict.get("blocks", []):
-                                if block.get("type") != 0:
-                                    continue
-                                for line in block.get("lines", []):
-                                    arah = line.get("dir", (1.0, 0.0))
-                                    if abs(arah[0] - 1.0) > 0.05 or abs(arah[1]) > 0.05:
-                                        continue
-                                    for span in line.get("spans", []):
-                                        if span.get("size", 0) > 13:
-                                            continue
-                                        txt = span.get("text", "").strip()
-                                        if not txt:
-                                            continue
-                                        bbox = span["bbox"]
-                                        cx = (bbox[0] + bbox[2]) / 2.0
-                                        cy = (bbox[1] + bbox[3]) / 2.0
+                                    if col_bounds:
+                                        table_x0 = col_bounds[0][0] - 5
+                                        table_x1 = col_bounds[-1][1] + 5
+                                        x_splits = [(col_bounds[j][1] + col_bounds[j+1][0]) / 2.0 for j in range(len(col_bounds) - 1)]
                                         
-                                        if cx < table_x0 or cx > table_x1 or cy < y_cuts[0] or cy > y_cuts[-1]:
-                                            continue
+                                        for r in raw[:5]:
+                                            cleaned = [str(c).replace('\n', ' ').strip().upper() if c else "" for c in r]
+                                            if sum(1 for kw in header_keywords if kw in " ".join(cleaned)) >= 2:
+                                                master_headers = [c if c else f"KOLOM_{j+1}" for j, c in enumerate(cleaned[:len(col_bounds)])]
+                                                break
+                                        if master_headers is None:
+                                            master_headers = [f"KOLOM_{j+1}" for j in range(len(col_bounds))]
+                                        ws.append(master_headers)
+
+                            if x_splits is not None:
+                                raw_ys = []
+                                for d in page.get_drawings():
+                                    r = d.get("rect")
+                                    if r and r.width > 5 and r.x1 > table_x0 and r.x0 < table_x1:
+                                        raw_ys.append(r.y0)
+                                        raw_ys.append(r.y1)
+                                
+                                if raw_ys:
+                                    raw_ys.sort()
+                                    y_cuts = []
+                                    for y in raw_ys:
+                                        if not y_cuts or (y - y_cuts[-1]) > 3.5:
+                                            y_cuts.append(y)
                                             
-                                        r_idx = bisect.bisect_right(y_cuts, cy) - 1
-                                        c_idx = bisect.bisect_right(x_splits, cx)
-                                        
-                                        if 0 <= r_idx < num_rows and 0 <= c_idx < num_cols:
-                                            grid[r_idx][c_idx].append((round(bbox[1], 1), bbox[0], txt))
+                                    if len(y_cuts) >= 2:
+                                        num_cols = len(x_splits) + 1
+                                        num_rows = len(y_cuts) - 1
+                                        grid = [[[] for _ in range(num_cols)] for _ in range(num_rows)]
 
-                            for r_idx in range(num_rows):
-                                row_vals = []
-                                ada_isi = False
-                                for c_idx in range(num_cols):
-                                    items = grid[r_idx][c_idx]
-                                    if items:
-                                        items.sort()
-                                        val = " ".join(x[2] for x in items)
-                                        row_vals.append(val)
-                                        ada_isi = True
-                                    else:
-                                        row_vals.append("")
-                                
-                                if not ada_isi:
-                                    continue
-                                if row_vals[0].upper() == master_headers[0] or (len(row_vals) > 1 and "IDPEL" in row_vals[1].upper()):
-                                    continue
-                                    
-                                ws.append(row_vals)
-                                total_baris += 1
-                                if len(preview_rows) < 50:
-                                    preview_rows.append(row_vals)
+                                        text_dict = page.get_text("dict")
+                                        for block in text_dict.get("blocks", []):
+                                            if block.get("type") != 0:
+                                                continue
+                                            for line in block.get("lines", []):
+                                                arah = line.get("dir", (1.0, 0.0))
+                                                # Abaikan teks miring/diagonal (watermark), namun izinkan teks horizontal/vertikal (landscape)
+                                                if abs(arah[0]) > 0.05 and abs(arah[1]) > 0.05:
+                                                    continue
+                                                for span in line.get("spans", []):
+                                                    if span.get("size", 0) > 13:
+                                                        continue
+                                                    txt = span.get("text", "").strip()
+                                                    if not txt:
+                                                        continue
+                                                    bbox = span["bbox"]
+                                                    cx = (bbox[0] + bbox[2]) / 2.0
+                                                    cy = (bbox[1] + bbox[3]) / 2.0
+                                                    
+                                                    if cx < table_x0 or cx > table_x1 or cy < y_cuts[0] or cy > y_cuts[-1]:
+                                                        continue
+                                                        
+                                                    r_idx = bisect.bisect_right(y_cuts, cy) - 1
+                                                    c_idx = bisect.bisect_right(x_splits, cx)
+                                                    
+                                                    if 0 <= r_idx < num_rows and 0 <= c_idx < num_cols:
+                                                        grid[r_idx][c_idx].append((round(bbox[1], 1), bbox[0], txt))
+
+                                        for r_idx in range(num_rows):
+                                            row_vals = []
+                                            ada_isi = False
+                                            for c_idx in range(num_cols):
+                                                items = grid[r_idx][c_idx]
+                                                if items:
+                                                    items.sort()
+                                                    val = " ".join(x[2] for x in items)
+                                                    row_vals.append(val)
+                                                    ada_isi = True
+                                                else:
+                                                    row_vals.append("")
+                                            
+                                            if not ada_isi:
+                                                continue
+                                            if row_vals[0].upper() == master_headers[0] or (len(row_vals) > 1 and "IDPEL" in row_vals[1].upper()):
+                                                continue
+                                                
+                                            ws.append(row_vals)
+                                            total_baris += 1
+                                            baris_file_ini += 1
+                                            if len(preview_rows) < 50:
+                                                preview_rows.append(row_vals)
 
                             if (i + 1) % 25 == 0 or (i + 1) == total_hal:
                                 fitz.TOOLS.store_shrink(100)
@@ -1139,40 +1117,57 @@ with tab4:
                                 gc.collect()
 
                         doc.close()
-                        if os.path.exists(tmp_pdf_path):
-                            os.remove(tmp_pdf_path)
                         fitz.TOOLS.store_shrink(100)
                         gc.collect()
+
+                        # Fallback otomatis ke pdfplumber jika file PDF tidak memiliki garis horizontal per baris (0 baris di mode Turbo)
+                        if baris_file_ini == 0 and PDF_SUPPORT:
+                            with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf_fb:
+                                for page_fb in pdf_fb.pages:
+                                    tables_fb = get_pdf_tables_tipe1(page_fb)
+                                    for t_fb in tables_fb:
+                                        df_fb = process_hybrid_table(t_fb)
+                                        if df_fb is not None and not df_fb.empty:
+                                            if master_headers is None:
+                                                master_headers = list(df_fb.columns)
+                                                ws.append(master_headers)
+                                            for row_fb in df_fb.values.tolist():
+                                                if len(row_fb) < len(master_headers):
+                                                    row_fb = row_fb + [""] * (len(master_headers) - len(row_fb))
+                                                elif len(row_fb) > len(master_headers):
+                                                    row_fb = row_fb[:len(master_headers)]
+                                                ws.append(row_fb)
+                                                total_baris += 1
+                                                baris_file_ini += 1
+                                                if len(preview_rows) < 50:
+                                                    preview_rows.append(row_fb)
+                                    page_fb.flush_cache()
 
                     except Exception as e:
                         st.error(f"Gagal memproses file {fname}: {str(e)}")
 
-            wb.save(tmp_excel_path)
+            excel_buffer_t4 = io.BytesIO()
+            wb.save(excel_buffer_t4)
             wb.close()
             del wb
             gc.collect()
 
             if total_baris > 0 and master_headers:
-                try:
-                    status_text.empty()
-                    progress_bar.progress(1.0)
-                    st.success(f"🎉 Selesai Super Cepat! Berhasil mengekstraksi {total_baris} baris bersih tanpa watermark dari {total_files} file!")
-                    
-                    preview_df = pd.DataFrame(preview_rows, columns=master_headers)
-                    st.dataframe(preview_df, use_container_width=True)
-                    
-                    with open(tmp_excel_path, "rb") as f_excel:
-                        st.download_button(
-                            "📥 Download Semua Data Tipe 2 (.xlsx)", 
-                            data=f_excel, 
-                            file_name="Hasil_Semua_Kolom_Tipe2.xlsx", 
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", 
-                            type="primary"
-                        )
-                finally:
-                    shutil.rmtree(work_dir, ignore_errors=True)
+                status_text.empty()
+                progress_bar.progress(1.0)
+                st.success(f"🎉 Selesai Super Cepat! Berhasil mengekstraksi {total_baris} baris bersih tanpa watermark dari {total_files} file!")
+                
+                preview_df = pd.DataFrame(preview_rows, columns=master_headers)
+                st.dataframe(preview_df, use_container_width=True)
+                
+                st.download_button(
+                    "📥 Download Semua Data Tipe 2 (.xlsx)", 
+                    data=excel_buffer_t4.getvalue(), 
+                    file_name="Hasil_Semua_Kolom_Tipe2.xlsx", 
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", 
+                    type="primary"
+                )
             else:
-                shutil.rmtree(work_dir, ignore_errors=True)
                 st.warning("⚠️ Tidak ada data tabel yang terdeteksi.")
 
 # ==========================================
@@ -1244,7 +1239,6 @@ with tab5:
                             alamat = re.search(r'Alamat\s*:\s*(.+)', blok)
                             if alamat: data['Alamat'] = alamat.group(1).strip()
                             
-                            # MEMAKAI REGEX YANG BENAR (A-Z0-9)
                             meter = re.search(r'Nomor Meter\s*:\s*([A-Z0-9]+)', blok, re.IGNORECASE)
                             if meter: data['Nomor Meter'] = str(meter.group(1).strip())
 
@@ -1737,17 +1731,12 @@ with tab11:
                 
                 for f_idx, uploaded_pdf in enumerate(pdf_files_t11):
                     fname = uploaded_pdf.name
-                    with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp: 
-                        tmp.write(uploaded_pdf.getvalue())
-                        tmp_path = tmp.name
-                        
                     try:
-                        with pdfplumber.open(tmp_path) as pdf:
+                        with pdfplumber.open(io.BytesIO(uploaded_pdf.getvalue())) as pdf:
                             total_hal = len(pdf.pages)
                             for i, page in enumerate(pdf.pages):
                                 clean_p = bersihkan_halaman_pdf(page)
                                 
-                                # STRATEGI BARU: Pakai teks untuk potong baris, karena tak ada garis horizontal
                                 table_settings = {
                                     "vertical_strategy": "lines",
                                     "horizontal_strategy": "text",
@@ -1763,30 +1752,24 @@ with tab11:
                                     
                                     merged_data = []
                                     for row in table:
-                                        # Bersihkan spasi dan enter
                                         c_row = [str(c).replace('\n', ' ').strip() if c else "" for c in row]
                                         if not any(c_row): continue
                                         
                                         row_str = " ".join(c_row).upper()
                                         
-                                        # Buang header yang berulang di setiap halaman
                                         if "NO. AGENDA" in row_str or "NAMA PEMOHON" in row_str or "TARIF/DAYA" in row_str or ("LAMA" in row_str and "BARU" in row_str) or "LAPORAN PEMBAYARAN" in row_str:
                                             continue
                                         
-                                        # Cek apakah ini pelanggan baru atau sekadar baris sambungan (lanjutan alamat)
                                         no_urut = c_row[0] if len(c_row) > 0 else ""
                                         no_agenda = c_row[1] if len(c_row) > 1 else ""
                                         
                                         is_new_row = False
-                                        # Pelanggan baru pasti punya No. Urut (angka) atau No. Agenda (angka panjang)
                                         if re.match(r'^\d+$', no_urut) or re.search(r'\d{5,}', no_agenda):
                                             is_new_row = True
                                             
                                         if is_new_row or not merged_data:
-                                            # Masukkan sebagai baris baru
                                             merged_data.append(c_row)
                                         else:
-                                            # Jika bukan, GABUNGKAN teksnya ke baris pelanggan di atasnya
                                             for col_idx in range(len(c_row)):
                                                 if c_row[col_idx]:
                                                     if col_idx < len(merged_data[-1]):
@@ -1797,7 +1780,6 @@ with tab11:
                                                     else:
                                                         merged_data[-1].append(c_row[col_idx])
                                                         
-                                    # Simpan hasil merge halaman ini yang isinya tidak kosong
                                     for r in merged_data:
                                         if any(r):
                                             all_extracted_rows.append(r)
@@ -1810,22 +1792,18 @@ with tab11:
                                 
                     except Exception as e:
                         st.error(f"Gagal memproses file {fname}: {str(e)}")
-                    finally:
-                        if os.path.exists(tmp_path): os.remove(tmp_path)
                 gc.collect()
 
             if all_extracted_rows:
                 status_text.empty()
                 progress_bar.progress(1.0)
                 
-                # Definisikan 15 Header Standar Laporan PLN agar kolomnya selalu rapih
                 master_headers = [
                     "No Urut", "No. Agenda", "Tgl Agenda", "Nama Pemohon", "Alamat Pemohon", 
                     "Tarif/Daya Lama", "Tarif/Daya Baru", "Delta Daya", "No. SIP", "Tgl SIP", 
                     "Tgl Bayar", "NOPEL / ID Pelanggan", "IDPEL Tetangga", "Telp / HP", "Keterangan Lunas Di"
                 ]
                 
-                # Menyesuaikan jika ada kolom lebih/kurang
                 max_cols = max(len(r) for r in all_extracted_rows)
                 if max_cols > len(master_headers):
                     for ext in range(len(master_headers), max_cols):
