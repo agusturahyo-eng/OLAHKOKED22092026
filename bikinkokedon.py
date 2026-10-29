@@ -1005,7 +1005,7 @@ with tab4:
                 shutil.rmtree(work_dir, ignore_errors=True)
             os.makedirs(work_dir, exist_ok=True)
 
-            os.environ["TMPDIR"] = work_dir
+            #os.environ["TMPDIR"] = work_dir
             tmp_excel_path = os.path.join(work_dir, "Hasil_Semua_Kolom_Tipe2.xlsx")
 
             wb = openpyxl.Workbook(write_only=True)
