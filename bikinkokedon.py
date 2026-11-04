@@ -387,6 +387,7 @@ def tentukan_petugas_tul(idpel, tarif_daya, kddk):
         return mapping_kddk.get(kode_mid, "BARU")
     return "BARU"
 
+@st.cache_data(show_spinner=False)
 def baca_data_dari_iconprn_tul(teks_mentah):
     hasil = []
     blok_halaman = re.split(r'PEMBERITAHUAN PELAKSANAAN PEMUTUSAN', teks_mentah)
@@ -591,7 +592,6 @@ def buat_isian_blangko(row, col_map, init_code, kota, tgl, jab, manager, is_ceta
     set_line(31, f"{'':<69}{str_jabatan}")
     set_line(36, f"{'':<64}{BOLD_ON}{manager}{BOLD_OFF}")
 
-    # Pangkas baris kosong di bawah agar Form Feed yang mengontrol sisa kertas
     last_idx = 0
     for i in range(page_lines - 1, -1, -1):
         if raw_lines[i] != "":
@@ -610,7 +610,6 @@ def buat_isian_blangko(row, col_map, init_code, kota, tgl, jab, manager, is_ceta
 
     output_lines[0] = init_code + output_lines[0]
     
-    # Kunci Akurasi: Akhiri lembaran dengan Form Feed (\x0C)
     return "\r\n".join(output_lines) + "\r\x0C"
 
 def buat_blangko_dan_isi(row, col_map, init_code, kota, tgl, jab, manager, page_lines=44):
@@ -809,7 +808,6 @@ with tab1:
                     zip_buffer = io.BytesIO()
                     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
                         
-                        # --- FUNGSI PENOMORAN RESET PER 7 DIGIT KOKED (Misal: HBAJCAA) ---
                         def tambah_nomor_urut_koked(df_target):
                             df_copy = df_target.copy()
                             if 'KOKED' in df_copy.columns:
@@ -819,14 +817,12 @@ with tab1:
                                 df_copy.insert(0, 'NO', range(1, len(df_copy) + 1))
                             return df_copy
 
-                        # 1. Tambah nomor urut untuk file PB_SEMUA_PETUGAS
                         if not df_pb.empty:
                             df_pb_clean = df_pb.drop_duplicates(subset=['IDPEL'], keep='first').copy()
                             df_pb_clean = tambah_nomor_urut_koked(df_pb_clean)
                             pb_bytes = to_excel_bytes(df_pb_clean[['NO'] + kolom_export])
                             zip_file.writestr("PB_SEMUA_PETUGAS.xlsx", pb_bytes)
 
-                        # Menggabungkan data Master
                         df_master_base = df_master[kolom_export].copy() if not df_master.empty else pd.DataFrame(columns=kolom_export)
                         df_pb_master_format = df_pb[kolom_export].copy()
                         df_master_combined = pd.concat([df_master_base, df_pb_master_format], ignore_index=True)
@@ -850,7 +846,6 @@ with tab1:
                         valid_alamat = in_baru & updated_alamat.notna() & (updated_alamat.astype(str).str.strip() != '') & (~updated_alamat.astype(str).str.contains(r'\*', na=False))
                         df_master_combined.loc[valid_alamat, 'ALAMAT'] = updated_alamat[valid_alamat]
 
-                        # 2. File MASTER_UPDATED (TIDAK DIBERI NOMOR URUT)
                         zip_file.writestr("MASTER_UPDATED.xlsx", to_excel_bytes(df_master_combined[kolom_export]))
 
                         mapping = {
@@ -864,7 +859,6 @@ with tab1:
                             'C33': 'TAK', 'C34': 'KAL', 'C35': 'JCL', 'C36': 'MBD'
                         }
                         
-                        # 3. Tambah nomor urut untuk file per-petugas (C01, C02, dst.)
                         def export_excel(df_source, prefix=""):
                             if df_source.empty: return
                             for nama_file, kriteria in mapping.items():
@@ -1064,7 +1058,6 @@ with tab4:
                                                 continue
                                             for line in block.get("lines", []):
                                                 arah = line.get("dir", (1.0, 0.0))
-                                                # Abaikan teks miring/diagonal (watermark), namun izinkan teks horizontal/vertikal (landscape)
                                                 if abs(arah[0]) > 0.05 and abs(arah[1]) > 0.05:
                                                     continue
                                                 for span in line.get("spans", []):
@@ -1120,7 +1113,6 @@ with tab4:
                         fitz.TOOLS.store_shrink(100)
                         gc.collect()
 
-                        # Fallback otomatis ke pdfplumber jika file PDF tidak memiliki garis horizontal per baris (0 baris di mode Turbo)
                         if baris_file_ini == 0 and PDF_SUPPORT:
                             with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf_fb:
                                 for page_fb in pdf_fb.pages:
