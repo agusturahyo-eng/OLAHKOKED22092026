@@ -541,7 +541,15 @@ def ambil_nilai(row, col_map, key, default=""):
         return str(row[nama_kolom]).strip()
     return default
 
-def buat_isian_blangko(row, col_map, init_code, kota, tgl, jab, manager, is_cetak_kota, geser_tgl, offset_x=0.0, offset_y=0.0, page_lines=44, printer_choice="", page_idx=0, geser_koked=0, geser_rptag=0, geser_bk=0, geser_total=0):
+def buat_isian_blangko(
+    row, col_map, init_code, kota, tgl, jab, manager, 
+    cetak_kota=False, cetak_tgl=True, cetak_jab=False, cetak_mgr=True,
+    geser_kota_x=0.0, geser_tgl=8.0, geser_kota_tgl_y=0,
+    geser_jab_x=0.0, geser_jab_y=0,
+    geser_mgr_x=0.0, geser_mgr_y=0,
+    offset_x=0.0, offset_y=0.0, page_lines=44, printer_choice="", page_idx=0, 
+    geser_koked=0, geser_rptag=0, geser_bk=0, geser_total=0
+):
     ESC = "\x1b"
     BOLD_ON = f"{ESC}E"  
     BOLD_OFF = f"{ESC}F" 
@@ -590,12 +598,30 @@ def buat_isian_blangko(row, col_map, init_code, kota, tgl, jab, manager, is_ceta
     set_line(15, f"{'':<39}{bln_lambat:<{w_bk}}{rp_denda}")
     set_line(17, f"{'':<{w_total}}{rp_total}")
     
-    str_kota = f"{kota}, " if is_cetak_kota else ""
-    str_jabatan = jab if is_cetak_kota else ""
-    
-    set_line(30, f"{'':<64}{str_kota}{tgl}", extra_x=geser_tgl)
-    set_line(31, f"{'':<69}{str_jabatan}")
-    set_line(36, f"{'':<64}{BOLD_ON}{manager}{BOLD_OFF}")
+    # Pengaturan Baris Kota & Tanggal Cetak
+    if cetak_kota and cetak_tgl:
+        teks_kota_tgl = f"{kota}, {tgl}"
+        x_kota_tgl = float(geser_kota_x) + float(geser_tgl)
+    elif cetak_kota and not cetak_tgl:
+        teks_kota_tgl = f"{kota}"
+        x_kota_tgl = float(geser_kota_x)
+    elif not cetak_kota and cetak_tgl:
+        teks_kota_tgl = f"{tgl}"
+        x_kota_tgl = float(geser_tgl)
+    else:
+        teks_kota_tgl = ""
+        x_kota_tgl = 0.0
+
+    if teks_kota_tgl:
+        set_line(30 + int(geser_kota_tgl_y), f"{'':<64}{teks_kota_tgl}", extra_x=x_kota_tgl)
+        
+    # Pengaturan Baris Jabatan
+    if cetak_jab and str(jab).strip():
+        set_line(31 + int(geser_jab_y), f"{'':<69}{jab}", extra_x=geser_jab_x)
+        
+    # Pengaturan Baris Nama Pejabat / Manager
+    if cetak_mgr and str(manager).strip():
+        set_line(36 + int(geser_mgr_y), f"{'':<64}{BOLD_ON}{manager}{BOLD_OFF}", extra_x=geser_mgr_x)
 
     last_idx = 0
     for i in range(page_lines - 1, -1, -1):
@@ -617,7 +643,10 @@ def buat_isian_blangko(row, col_map, init_code, kota, tgl, jab, manager, is_ceta
     
     return "\r\n".join(output_lines) + "\r\x0C"
 
-def buat_blangko_dan_isi(row, col_map, init_code, kota, tgl, jab, manager, page_lines=44):
+def buat_blangko_dan_isi(
+    row, col_map, init_code, kota, tgl, jab, manager, page_lines=44,
+    cetak_kota=True, cetak_tgl=True, cetak_jab=True, cetak_mgr=True
+):
     ESC = "\x1b"
     BOLD_ON = f"{ESC}E"
     BOLD_OFF = f"{ESC}F"
@@ -638,6 +667,14 @@ def buat_blangko_dan_isi(row, col_map, init_code, kota, tgl, jab, manager, page_
     rp_rek = format_rupiah(ambil_nilai(row, col_map, "Jumlah Rekening", "0")).rjust(15)
     rp_denda = format_rupiah(ambil_nilai(row, col_map, "Jumlah Denda", "0")).rjust(15)
     rp_total = format_rupiah(ambil_nilai(row, col_map, "Jumlah Tunggakan", "0")).rjust(15)
+
+    if cetak_kota and cetak_tgl: baris_kota_tgl = f"                                                                {kota}, {tgl}"
+    elif cetak_kota: baris_kota_tgl = f"                                                                {kota}"
+    elif cetak_tgl: baris_kota_tgl = f"                                                                {tgl}"
+    else: baris_kota_tgl = ""
+
+    baris_jab = f"                                                                     {jab}" if cetak_jab else ""
+    baris_mgr = f"|------------------------------------------------------|        {BOLD_ON}{manager}{BOLD_OFF}" if cetak_mgr else "|------------------------------------------------------|"
 
     lines = [
         f"{init_code}PT. PLN (PERSERO) UID JAWA TENGAH DAN DIY",
@@ -670,13 +707,13 @@ def buat_blangko_dan_isi(row, col_map, init_code, kota, tgl, jab, manager, page_
         "",
         "UNTUK MENGHINDARI RESIKO, MOHON TIDAK TITIP PEMBAYARAN REKENING KEPADA PETUGAS",
         "",
-        f"                                                                {kota}, {tgl}",
-        f"                                                                     {jab}",
+        baris_kota_tgl,
+        baris_jab,
         "",
         "|------------------------------------------------------|",
         "|       PADA WAKTU MELAKUKAN PEMBAYARAN DIMOHON        |",
         "|         MENUNJUKKAN SURAT PEMBERITAHUAN INI          |",
-        f"|------------------------------------------------------|        {BOLD_ON}{manager}{BOLD_OFF}",
+        baris_mgr,
         "                              TGL  STAND PUTUS  PELANGGAN        ",
         "",
         "A5 TUL VI-01/PETUGAS PEMUTUS...... ... ... ... ...........                   ",
@@ -1851,17 +1888,40 @@ with tab12:
             geser_bk = st.number_input("Geser Posisi Biaya Keterlambatan:", min_value=-30, max_value=30, value=0, step=1, key="t12_geser_bk")
             geser_total = st.number_input("Geser Posisi Jumlah Total:", min_value=-30, max_value=30, value=0, step=1, key="t12_geser_total")
 
-        with st.expander("✍️ Pengaturan Tanda Tangan"):
-            cetak_kota_jabatan = st.checkbox("Cetak tulisan Kota & Jabatan", value=False, key="t12_ctk_jab")
-            geser_tgl = st.number_input("Geser Kiri/Kanan KHUSUS Tanggal (Spasi):", min_value=-30.0, max_value=30.0, value=8.0, step=0.5, format="%.2f", key="t12_geser_tgl")
-            kota_cetak = st.text_input("Kota", value="TULUNG", key="t12_kota")
-            
-            zona_wib = timezone(timedelta(hours=7))
-            tgl_hari_ini = datetime.now(zona_wib).strftime("%d-%m-%Y")
-            tgl_cetak = st.text_input("Tanggal Cetak", value=tgl_hari_ini, key="t12_tgl")
-            
-            jabatan = st.text_input("Jabatan", value="MANAGER", key="t12_jab")
-            nama_manager = st.text_input("Nama Manager", value="MARTONO AJI PRABOWO", key="t12_mgr")
+        with st.expander("✍️ Pengaturan Tanda Tangan (Kota, Tgl, Jabatan, Pejabat)"):
+            st.caption("**1. Pengaturan Kota & Tanggal Cetak:**")
+            c_kt1, c_kt2 = st.columns(2)
+            with c_kt1:
+                cetak_kota = st.checkbox("Cetak Kota", value=False, key="t12_ctk_kota")
+                kota_cetak = st.text_input("Nama Kota", value="TULUNG", key="t12_kota")
+                geser_kota_x = st.number_input("Geser Kiri/Kanan Kota (Spasi):", min_value=-30.0, max_value=30.0, value=0.0, step=0.5, format="%.2f", key="t12_geser_kota_x")
+            with c_kt2:
+                cetak_tgl = st.checkbox("Cetak Tanggal", value=True, key="t12_ctk_tgl")
+                zona_wib = timezone(timedelta(hours=7))
+                tgl_hari_ini = datetime.now(zona_wib).strftime("%d-%m-%Y")
+                tgl_cetak = st.text_input("Tanggal Cetak", value=tgl_hari_ini, key="t12_tgl")
+                geser_tgl = st.number_input("Geser Kiri/Kanan Tgl (Spasi):", min_value=-30.0, max_value=30.0, value=8.0, step=0.5, format="%.2f", key="t12_geser_tgl")
+            geser_kota_tgl_y = st.number_input("Geser Turun/Naik Baris Kota & Tgl (Baris):", min_value=-10, max_value=10, value=0, step=1, key="t12_geser_kota_tgl_y")
+
+            st.markdown("---")
+            st.caption("**2. Pengaturan Jabatan:**")
+            cetak_jab = st.checkbox("Cetak Jabatan", value=False, key="t12_ctk_jab")
+            jabatan = st.text_input("Nama Jabatan", value="MANAGER", key="t12_jab")
+            c_jb1, c_jb2 = st.columns(2)
+            with c_jb1:
+                geser_jab_x = st.number_input("Geser Kiri/Kanan Jabatan (Spasi):", min_value=-30.0, max_value=30.0, value=0.0, step=0.5, format="%.2f", key="t12_geser_jab_x")
+            with c_jb2:
+                geser_jab_y = st.number_input("Geser Turun/Naik Jabatan (Baris):", min_value=-10, max_value=10, value=0, step=1, key="t12_geser_jab_y")
+
+            st.markdown("---")
+            st.caption("**3. Pengaturan Nama Pejabat / Manager:**")
+            cetak_mgr = st.checkbox("Cetak Nama Pejabat", value=True, key="t12_ctk_mgr")
+            nama_manager = st.text_input("Nama Pejabat / Manager", value="MARTONO AJI PRABOWO", key="t12_mgr")
+            c_mg1, c_mg2 = st.columns(2)
+            with c_mg1:
+                geser_mgr_x = st.number_input("Geser Kiri/Kanan Nama (Spasi):", min_value=-30.0, max_value=30.0, value=0.0, step=0.5, format="%.2f", key="t12_geser_mgr_x")
+            with c_mg2:
+                geser_mgr_y = st.number_input("Geser Turun/Naik Nama (Baris):", min_value=-10, max_value=10, value=0, step=1, key="t12_geser_mgr_y")
 
     with col_t12_2:
         init_esc = get_printer_init_code(tipe_printer, tinggi_halaman)
@@ -1952,9 +2012,20 @@ with tab12:
                         hasil_iconprn = ""
                         for page_idx, (_, baris) in enumerate(df_cetak.iterrows()):
                             if "Tahap 2" in mode_cetak:
-                                hasil_iconprn += buat_isian_blangko(baris, col_map_final, init_esc, kota_cetak, tgl_cetak, jabatan, nama_manager, cetak_kota_jabatan, geser_tgl, geser_kanan, geser_bawah, tinggi_halaman, tipe_printer, page_idx, geser_koked, geser_rptag, geser_bk, geser_total)
+                                hasil_iconprn += buat_isian_blangko(
+                                    baris, col_map_final, init_esc, kota_cetak, tgl_cetak, jabatan, nama_manager, 
+                                    cetak_kota, cetak_tgl, cetak_jab, cetak_mgr,
+                                    geser_kota_x, geser_tgl, geser_kota_tgl_y,
+                                    geser_jab_x, geser_jab_y,
+                                    geser_mgr_x, geser_mgr_y,
+                                    geser_kanan, geser_bawah, tinggi_halaman, tipe_printer, page_idx, 
+                                    geser_koked, geser_rptag, geser_bk, geser_total
+                                )
                             else:
-                                hasil_iconprn += buat_blangko_dan_isi(baris, col_map_final, init_esc, kota_cetak, tgl_cetak, jabatan, nama_manager, tinggi_halaman)
+                                hasil_iconprn += buat_blangko_dan_isi(
+                                    baris, col_map_final, init_esc, kota_cetak, tgl_cetak, jabatan, nama_manager, tinggi_halaman,
+                                    cetak_kota, cetak_tgl, cetak_jab, cetak_mgr
+                                )
 
                         nama_ptg_file = "_".join(ptg_terpilih)
                         
@@ -1977,9 +2048,20 @@ with tab12:
                                         teks_p = ""
                                         for p_idx, (_, r) in enumerate(grp.iterrows()):
                                             if "Tahap 2" in mode_cetak:
-                                                teks_p += buat_isian_blangko(r, col_map_final, init_esc, kota_cetak, tgl_cetak, jabatan, nama_manager, cetak_kota_jabatan, geser_tgl, geser_kanan, geser_bawah, tinggi_halaman, tipe_printer, p_idx, geser_koked, geser_rptag, geser_bk, geser_total)
+                                                teks_p += buat_isian_blangko(
+                                                    r, col_map_final, init_esc, kota_cetak, tgl_cetak, jabatan, nama_manager, 
+                                                    cetak_kota, cetak_tgl, cetak_jab, cetak_mgr,
+                                                    geser_kota_x, geser_tgl, geser_kota_tgl_y,
+                                                    geser_jab_x, geser_jab_y,
+                                                    geser_mgr_x, geser_mgr_y,
+                                                    geser_kanan, geser_bawah, tinggi_halaman, tipe_printer, p_idx, 
+                                                    geser_koked, geser_rptag, geser_bk, geser_total
+                                                )
                                             else:
-                                                teks_p += buat_blangko_dan_isi(r, col_map_final, init_esc, kota_cetak, tgl_cetak, jabatan, nama_manager, tinggi_halaman)
+                                                teks_p += buat_blangko_dan_isi(
+                                                    r, col_map_final, init_esc, kota_cetak, tgl_cetak, jabatan, nama_manager, tinggi_halaman,
+                                                    cetak_kota, cetak_tgl, cetak_jab, cetak_mgr
+                                                )
                                         zf.writestr(f"PETUGAS_{kode_p}_{len(grp)}lembar.iconprn", teks_p.encode("latin1", errors="replace"))
                                 
                                 st.download_button(
